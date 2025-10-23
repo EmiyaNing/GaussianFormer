@@ -53,8 +53,8 @@ class GaussianLifterV2(BaseLifter):
         use_lidar_init=True,           # 使用LiDAR初始化
         lidar_fusion_frames=1,            # 融合帧数
         lidar_min_points=1,        # 体素内最小点数
-        max_anchors=25600,               # 最大锚点数量
-        lidar_voxel_size=0.15,
+        max_anchors=6400,               # 最大锚点数量
+        lidar_voxel_size=0.4,
         **kwargs,
     ):
         super().__init__()

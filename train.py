@@ -2,6 +2,7 @@ import time, argparse, os.path as osp, os
 import torch, numpy as np
 import torch.distributed as dist
 from copy import deepcopy
+import os
 
 import mmcv
 from mmengine import Config
@@ -14,6 +15,23 @@ from timm.scheduler import CosineLRScheduler, MultiStepLRScheduler
 
 import warnings
 warnings.filterwarnings("ignore")
+
+SEMANTICKITTI_CLASSES = [
+    'unlabeled', 'car', 'bicycle', 'motorcycle', 'truck', 'other-vehicle',
+    'person', 'bicyclist', 'motorcyclist', 'road', 'parking', 'sidewalk',
+    'other-ground', 'building', 'fence', 'vegetation', 'trunk', 'terrain',
+    'pole', 'traffic-sign'
+]
+
+def get_semantickitti_miou_metric():
+    """获取SemanticKITTI的mIoU评估指标"""
+    from misc.metric_util import MeanIoU
+    return MeanIoU(
+        list(range(1, 20)),  # SemanticKITTI有19个有效类别（不包括unlabeled）
+        20,  # 总类别数（包括unlabeled）
+        SEMANTICKITTI_CLASSES,
+        True, 20, filter_minmax=False
+    )
 
 
 def pass_print(*args, **kwargs):
@@ -102,6 +120,45 @@ def main(local_rank, args):
         cfg.val_loader,
         dist=distributed,
         iter_resume=args.iter_resume)
+    
+    # data_root = 'data/semanticKITTI/dataset/'
+    # print(f"检查数据路径: {data_root}")
+    # print(f"路径存在: {os.path.exists(data_root)}")
+
+    # if os.path.exists(data_root):
+    #     # 检查序列文件夹
+    #     sequences = ['00', '01', '02', '03', '04', '05', '06', '07', '09', '10']
+    #     for seq in sequences:
+    #         seq_path = os.path.join(data_root, 'sequences', seq)
+    #         print(f"序列 {seq} 路径: {seq_path}, 存在: {os.path.exists(seq_path)}")
+    #         if os.path.exists(seq_path):
+    #             velodyne_path = os.path.join(seq_path, 'velodyne')
+    #             print(f"  velodyne路径: {velodyne_path}, 存在: {os.path.exists(velodyne_path)}")
+    #             if os.path.exists(velodyne_path):
+    #                 files = os.listdir(velodyne_path)
+    #                 print(f"  点云文件数量: {len([f for f in files if f.endswith('.bin')])}")
+    
+    # # 检查训练数据加载器是否为空
+    # if len(train_dataset_loader) == 0:
+    #     logger.error(f"训练数据加载器为空！请检查数据集配置。")
+    #     logger.error(f"训练数据集配置: {cfg.train_dataset_config}")
+    #     exit(1)
+
+    # # 检查数据加载器长度
+    # logger.info(f"训练数据加载器长度: {len(train_dataset_loader)}")
+    # logger.info(f"验证数据加载器长度: {len(val_dataset_loader)}")
+    # max_num_epochs = cfg.max_epochs
+
+    # # 计算总训练步数
+    # total_steps = len(train_dataset_loader) * max_num_epochs
+    # if total_steps <= 0:
+    #     logger.error(f"总训练步数必须大于0，当前为: {total_steps}")
+    #     logger.error(f"请检查数据集和配置")
+    #     exit(1)
+
+    # logger.info(f"总训练步数: {total_steps}")
+
+    
 
     # get optimizer, loss, scheduler
     optimizer = build_optim_wrapper(my_model, cfg.optimizer)
@@ -172,15 +229,19 @@ def main(local_rank, args):
     grad_accumulation = args.gradient_accumulation
     grad_norm = 0
     from misc.metric_util import MeanIoU
-    miou_metric = MeanIoU(
-        list(range(1, 17)),
-        17, #17,
-        ['barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
-         'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
-         'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
-         'vegetation'],
-         True, 17, filter_minmax=False)
+    if args.dataset == 'semantickitti':
+        miou_metric = get_semantickitti_miou_metric()
+    else:
+        miou_metric = MeanIoU(
+            list(range(1, 17)),
+            17,
+            ['barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
+            'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
+            'vegetation'],
+            True, 17, filter_minmax=False)
     miou_metric.reset()
+
 
     while epoch < max_num_epochs:
         my_model.train()
@@ -209,9 +270,22 @@ def main(local_rank, args):
                     'metas': data,
                     'global_iter': global_iter
                 }
+
+                
                 for loss_input_key, loss_input_val in cfg.loss_input_convertion.items():
-                    loss_input.update({
-                        loss_input_key: result_dict[loss_input_val]})
+                    if loss_input_val in result_dict:
+                        loss_input[loss_input_key] = result_dict[loss_input_val]
+                    else:
+                        logger.warning(f"Key {loss_input_val} not found in result_dict")
+                    
+                if local_rank == 0 and global_iter % 10 == 0:
+                    for k, v in loss_input.items():
+                        if isinstance(v, torch.Tensor):
+                            logger.info(f"loss_input[{k}]: shape={v.shape}, min={v.min().item()}, max={v.max().item()}")
+                        elif isinstance(v, list):
+                            logger.info(f"loss_input[{k}]: list of {len(v)} elements")
+
+
                 loss, loss_dict = loss_func(loss_input)
                 loss = loss / grad_accumulation
             if not amp:
