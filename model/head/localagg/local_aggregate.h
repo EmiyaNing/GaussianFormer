@@ -41,3 +41,15 @@ LocalAggregateBackwardCUDA(
 	const torch::Tensor& opacities,
 	const torch::Tensor& semantics,
 	const torch::Tensor& out_grad);
+
+// 在文件末尾添加
+torch::Tensor LocalAggregateInverseCUDA(
+    const torch::Tensor& pts,
+    const torch::Tensor& points_int,
+    const torch::Tensor& means3D,
+    const torch::Tensor& means3D_int,
+    const torch::Tensor& opacity,
+    const torch::Tensor& occupancy_gt,
+    const torch::Tensor& cov3D,
+    const torch::Tensor& radii,
+    const int H, int W, int D);

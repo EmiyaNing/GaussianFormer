@@ -41,6 +41,20 @@ namespace BACKWARD
         const int* points_xyz,
         const dim3 grid,
         int* voxel2pts);
+
+        void inverse_render(
+        const int P,
+        const uint32_t* offsets,
+        const uint32_t* point_list_keys_unsorted,
+        const int* voxel2pts,
+        const int H, const int W, const int D,
+        const float* pts,
+        const int N,
+        const float* means3D,
+        const float* cov3D,
+        const float* opacity,
+        const float* occupancy_gt,
+        float* gaussian_semantic_mask);
 }
 
 #endif

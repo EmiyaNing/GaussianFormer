@@ -31,7 +31,10 @@ class NuScenesDataset(Dataset):
             'occ_cam_mask',
             'ori_img',
             'cam_positions',
-            'focal_positions'
+            'focal_positions',
+            'lidar_points',
+            'lidar_pose',
+            'ego_pose'
         ],
     ):
         self.data_path = data_root
@@ -130,6 +133,7 @@ class NuScenesDataset(Dataset):
         ego2global = np.eye(4)
         ego2global[:3, :3] = Quaternion(info['data']['LIDAR_TOP']['pose']['rotation']).rotation_matrix
         ego2global[:3, 3] = np.asarray(info['data']['LIDAR_TOP']['pose']['translation']).T
+        lidar_points = self.load_lidar_points(info['data']['LIDAR_TOP']['filename'])
 
         for cam_type in self.sensor_types:
             image_paths.append(os.path.join(self.data_path, info['data'][cam_type]['filename']))
@@ -161,9 +165,23 @@ class NuScenesDataset(Dataset):
             lidar2img=np.asarray(lidar2img_rts),
             ego2img=np.asarray(ego2image_rts),
             cam_positions=np.asarray(cam_positions),
-            focal_positions=np.asarray(focal_positions))
-
+            focal_positions=np.asarray(focal_positions),
+            lidar_points=lidar_points,  # [N, 4] 点云数据 (x, y, z, intensity)
+            lidar_pose=lidar2global,    # LiDAR到全局坐标系的变换矩阵
+            ego_pose=ego2global         # Ego到全局坐标系的变换矩阵
+        )
         return input_dict
 
     def __len__(self):
         return len(self.keyframes)
+    
+
+    def load_lidar_points(self, lidar_filename):
+        """加载LiDAR点云数据"""
+        lidar_path = os.path.join(self.data_path, lidar_filename)
+    
+        points = np.fromfile(lidar_path, dtype=np.float32)
+        points = points.reshape(-1, 5)  # NuScenes: x, y, z, intensity, ring_index
+        points = points[:, :4]
+    
+        return points

@@ -11,6 +11,7 @@ from mmengine.logging import MMLogger
 from mmengine.utils import symlink
 from mmseg.models import build_segmentor
 from timm.scheduler import CosineLRScheduler, MultiStepLRScheduler
+from one_cycle_lr import OneCycleLR
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -111,6 +112,12 @@ def main(local_rank, args):
         scheduler = MultiStepLRScheduler(
             optimizer,
             **cfg.multisteplr_config
+        )
+    elif cfg.get('onecyclelr'):
+        scheduler = OneCycleLR(
+            optimizer.optimizer,
+            num_steps=len(train_dataset_loader) * max_num_epochs,
+            lr_range=(2e-5, 2e-4)
         )
     else:
         scheduler = CosineLRScheduler(

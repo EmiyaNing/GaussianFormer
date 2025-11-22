@@ -1,7 +1,10 @@
 try:
-    from vis import save_occ, save_gaussian, save_gaussian_topdown
+    from vis_open3d_voxel import save_occ, save_gaussian, save_gaussian_topdown
 except:
-    print('Load Occupancy Visualization Tools Failed.')
+    try:
+        from vis import save_occ, save_gaussian, save_gaussian_topdown
+    except:
+        print('Load Occupancy Visualization Tools Failed.')
 import time, argparse, os.path as osp, os
 import torch, numpy as np
 import torch.distributed as dist
@@ -142,7 +145,7 @@ def main(local_rank, args):
 
     my_model.eval()
     os.environ['eval'] = 'true'
-    if args.vis_occ or args.vis_gaussian or args.vis_gaussian_topdown:
+    if args.vis_occ or args.vis_gaussian or args.vis_gaussian_point or args.vis_gaussian_topdown:
         save_dir = os.path.join(args.work_dir, f'vis_ep{args.epoch}')
         os.makedirs(save_dir, exist_ok=True)
     if args.model_type == "base":
@@ -202,6 +205,14 @@ def main(local_rank, args):
                         result_dict['gaussian'],
                         f'val_{i_iter_val}_gaussian',
                         **draw_gaussian_params)
+                if args.vis_gaussian_point:
+                    from vis_open3d_voxel import save_gaussian_point
+                    save_gaussian_point(
+                        save_dir,
+                        result_dict['gaussian'],
+                        f'val_{i_iter_val}_gaussian',
+                        **draw_gaussian_params
+                    )
                 miou_metric._after_step(pred_occ, gt_occ)
             
             if i_iter_val % print_freq == 0 and local_rank == 0:
@@ -229,6 +240,7 @@ if __name__ == '__main__':
     parser.add_argument('--num-samples', type=int, default=1)
     parser.add_argument('--vis_scene_index', type=int, default=-1)
     parser.add_argument('--vis-scene', action='store_true', default=False)
+    parser.add_argument('--vis_gaussian_point', action='store_true', default=False)
     parser.add_argument('--epoch', type=int, default=0)
     parser.add_argument('--dataset', type=str, default='nusc')
     parser.add_argument('--model-type', type=str, default="base", choices=["base", "prob"])

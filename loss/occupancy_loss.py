@@ -99,7 +99,7 @@ class OccupancyLoss(BaseLoss):
                 class_weight=self.class_weights,
                 loss_weight=2.0)
         
-    def loss_voxel(self, pred_occ, sampled_xyz, sampled_label, occ_mask=None):
+    def loss_voxel(self, pred_occ, sampled_xyz, sampled_label, occ_mask=None, gaussian_sem_preds=None, gaussian_sem_label=None):
 
         tot_loss = 0.
         if self.ignore_empty:
@@ -146,6 +146,11 @@ class OccupancyLoss(BaseLoss):
             for k, v in loss_dict.items():
                 loss = loss + v
             tot_loss = tot_loss + loss
+
+        if gaussian_sem_label is not None and gaussian_sem_preds is not None:
+            loss = torch.abs(F.kl_div(gaussian_sem_preds, gaussian_sem_label))            
+            tot_loss = tot_loss + loss
+        
         return tot_loss / len(pred_occ)
 
 

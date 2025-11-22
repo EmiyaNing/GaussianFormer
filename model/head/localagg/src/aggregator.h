@@ -59,6 +59,25 @@ namespace LocalAggregator
 			float* semantics_grad,
 			float* cov3D_grad,
 			bool debug = false);
+
+		static int inverse_render(
+			std::function<char* (size_t)> geometryBuffer,
+			std::function<char* (size_t)> binningBuffer,
+			std::function<char* (size_t)> imageBuffer,
+			const int P, int N,
+			const float* pts,
+			const int* points_int,
+			const float* means3D,
+			const int* means3D_int,
+			const float* opacities,
+			const float* occupancy_gt,
+			const float* cov3D,
+			const int* radii,
+			const int H,
+			const int W,
+			const int D,
+			float* gaussian_semantic_mask,
+			bool debug = false);
 	};
 };
 

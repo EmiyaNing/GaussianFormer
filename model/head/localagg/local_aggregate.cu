@@ -128,3 +128,54 @@ LocalAggregateBackwardCUDA(
 
 	return std::make_tuple(means3D_grad, opacity_grad, semantics_grad, cov3D_grad);
 }
+
+torch::Tensor LocalAggregateInverseCUDA(
+    const torch::Tensor& pts,
+    const torch::Tensor& points_int,
+    const torch::Tensor& means3D,
+    const torch::Tensor& means3D_int,
+    const torch::Tensor& opacity,
+    const torch::Tensor& occupancy_gt,
+    const torch::Tensor& cov3D,
+    const torch::Tensor& radii,
+    const int H, int W, int D)
+{
+    const int P = means3D.size(0);
+    const int N = pts.size(0);
+    const int C = occupancy_gt.size(1);
+
+    auto float_opts = means3D.options().dtype(torch::kFloat32);
+    torch::Tensor gaussian_semantic_mask = torch::zeros({P, C}, float_opts);
+
+    // 重用现有的几何和分箱缓冲区
+    torch::Device device(torch::kCUDA);
+    torch::TensorOptions options(torch::kByte);
+    torch::Tensor geomBuffer = torch::empty({0}, options.device(device));
+    torch::Tensor binningBuffer = torch::empty({0}, options.device(device));
+    torch::Tensor imgBuffer = torch::empty({0}, options.device(device));
+    
+    std::function<char*(size_t)> geomFunc = resizeFunctional(geomBuffer);
+    std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
+    std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
+
+    // 直接调用Aggregator的inverse_render函数
+    LocalAggregator::Aggregator::inverse_render(
+        geomFunc,
+        binningFunc,
+        imgFunc,
+        P, N,
+        pts.contiguous().data<float>(),
+        points_int.contiguous().data<int>(),
+        means3D.contiguous().data<float>(),
+        means3D_int.contiguous().data<int>(),
+        opacity.contiguous().data<float>(),
+        occupancy_gt.contiguous().data<float>(),
+        cov3D.contiguous().data<float>(),
+        radii.contiguous().data<int>(),
+        H, W, D,
+        gaussian_semantic_mask.contiguous().data<float>(),
+        false // debug = false
+    );
+
+    return gaussian_semantic_mask;
+}

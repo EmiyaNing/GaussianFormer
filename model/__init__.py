@@ -4,3 +4,4 @@ from .neck import *
 from .lifter import *
 from .encoder import *
 from .head import *
+from .backbone_img import *

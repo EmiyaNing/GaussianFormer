@@ -5,3 +5,5 @@ from .spconv3d_module import SparseConv3D
 from .anchor_encoder_module import SparseGaussian3DEncoder
 from .ffn_module import AsymmetricFFN
 from .gaussian_encoder import GaussianOccEncoder
+from .refine_densify_module import Gaussian3DDensifyModule
+from .densify_module import DensifyModule

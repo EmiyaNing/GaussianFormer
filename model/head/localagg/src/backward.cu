@@ -149,3 +149,92 @@ void BACKWARD::preprocess(
 		voxel2pts
 	);
 }
+
+// Inverse Render CUDA 核函数
+template <uint32_t CHANNELS>
+__global__ void inverseRenderCUDA(
+    const int P,
+    const uint32_t* __restrict__ offsets,
+    const uint32_t* __restrict__ point_list_keys_unsorted,
+    const int* __restrict__ voxel2pts,
+    const int H, const int W, const int D,
+    const float* __restrict__ pts,
+    const int N,
+    const float* __restrict__ means3D,
+    const float* __restrict__ cov3D,
+    const float* __restrict__ opacity,
+    const float* __restrict__ occupancy_gt,
+    float* __restrict__ gaussian_semantic_mask)
+{
+    auto idx = cg::this_grid().thread_rank();
+    if (idx >= P)
+        return;
+
+    uint32_t start = (idx == 0) ? 0 : offsets[idx - 1];
+    uint32_t end = offsets[idx];
+    
+    const float3 means = {means3D[3 * idx], means3D[3 * idx + 1], means3D[3 * idx + 2]};
+    const float3 cov1 = {cov3D[6 * idx], cov3D[6 * idx + 1], cov3D[6 * idx + 2]};
+    const float3 cov2 = {cov3D[6 * idx + 3], cov3D[6 * idx + 4], cov3D[6 * idx + 5]};
+    const float opa = opacity[idx];
+
+    float semantic_accum[CHANNELS] = {0};
+    float weight_accum = 0.0f;
+
+    for (int i = start; i < end; i++) {
+        int voxel_idx = point_list_keys_unsorted[i];
+        // 边界检查：确保voxel_idx在有效范围内
+        if (voxel_idx >= 0 && voxel_idx < H * W * D) {
+            int pts_idx = voxel2pts[voxel_idx];
+            // 边界检查：确保pts_idx在有效范围内
+            if (pts_idx >= 0 && pts_idx < N) {
+                float3 d = {means.x - pts[pts_idx * 3], means.y - pts[pts_idx * 3 + 1], means.z - pts[pts_idx * 3 + 2]};
+                float power = cov1.x * d.x * d.x + cov1.y * d.y * d.y + cov1.z * d.z * d.z;
+                power = -0.5f * power - (cov2.x * d.x * d.y + cov2.y * d.y * d.z + cov2.z * d.x * d.z);
+                power = exp(power);
+                
+                float influence = opa * power;
+                for (int ch = 0; ch < CHANNELS; ch++) {
+                    semantic_accum[ch] += influence * occupancy_gt[pts_idx * CHANNELS + ch];
+                }
+                weight_accum += influence;
+            }
+        }
+    }
+
+    // 归一化：加权平均
+    for (int ch = 0; ch < CHANNELS; ch++) {
+        gaussian_semantic_mask[idx * CHANNELS + ch] =
+            (weight_accum > 1e-6f) ? semantic_accum[ch] / weight_accum : 0.0f;
+    }
+}
+
+// Inverse Render 包装函数
+void BACKWARD::inverse_render(
+    const int P,
+    const uint32_t* offsets,
+    const uint32_t* point_list_keys_unsorted,
+    const int* voxel2pts,
+    const int H, const int W, const int D,
+    const float* pts,
+    const int N,
+    const float* means3D,
+    const float* cov3D,
+    const float* opacity,
+    const float* occupancy_gt,
+    float* gaussian_semantic_mask)
+{
+    inverseRenderCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
+        P,
+        offsets,
+        point_list_keys_unsorted,
+        voxel2pts,
+        H, W, D,
+        pts,
+        N,
+        means3D,
+        cov3D,
+        opacity,
+        occupancy_gt,
+        gaussian_semantic_mask);
+}

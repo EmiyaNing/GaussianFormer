@@ -305,3 +305,123 @@ void LocalAggregator::Aggregator::backward(
 		semantics_grad,
 		cov3D_grad), debug)
 }
+
+// Inverse rendering procedure for differentiable rasterization
+// of Gaussians.
+int LocalAggregator::Aggregator::inverse_render(
+    std::function<char* (size_t)> geometryBuffer,
+    std::function<char* (size_t)> binningBuffer,
+    std::function<char* (size_t)> imageBuffer,
+    const int P, int N,
+    const float* pts,
+    const int* points_int,
+    const float* means3D,
+    const int* means3D_int,
+    const float* opacities,
+    const float* occupancy_gt,
+    const float* cov3D,
+    const int* radii,
+    const int H,
+    const int W,
+    const int D,
+    float* gaussian_semantic_mask,
+    bool debug)
+{
+    size_t chunk_size = required<GeometryState>(P);
+    char* chunkptr = geometryBuffer(chunk_size);
+    GeometryState geomState = GeometryState::fromChunk(chunkptr, P);
+
+    // Dynamically resize image-based auxiliary buffers during training
+    size_t img_chunk_size = required<ImageState>(H * W * D);
+    char* img_chunkptr = imageBuffer(img_chunk_size);
+    ImageState imgState = ImageState::fromChunk(img_chunkptr, H * W * D);
+
+    // Allocate separate buffer for voxel2pts mapping
+    size_t voxel2pts_size = H * W * D * sizeof(int);
+    char* voxel2pts_buffer = imageBuffer(voxel2pts_size);
+    int* voxel2pts = reinterpret_cast<int*>(voxel2pts_buffer);
+
+    dim3 grid(H, W, D);
+
+    // Initialize voxel2pts to -1 (invalid)
+    CHECK_CUDA(cudaMemset(voxel2pts, -1, voxel2pts_size), debug);
+
+    // Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
+    CHECK_CUDA(FORWARD::preprocess(
+        P,
+        means3D_int,
+        radii,
+        grid,
+        geomState.tiles_touched
+    ), debug)
+
+    // Compute prefix sum over full list of touched tile counts by Gaussians
+    // E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
+    CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug);
+
+    // Retrieve total number of Gaussian instances to launch and resize aux buffers
+    int num_rendered;
+    CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
+
+    size_t binning_chunk_size = required<BinningState>(num_rendered);
+    char* binning_chunkptr = binningBuffer(binning_chunk_size);
+    BinningState binningState = BinningState::fromChunk(binning_chunkptr, num_rendered);
+
+    // For each instance to be rendered, produce adequate [ tile | depth ] key
+    // and corresponding duplicated Gaussian indices to be sorted
+    duplicateWithKeys << <(P + 255) / 256, 256 >> > (
+        P,
+        means3D_int,
+        geomState.point_offsets,
+        binningState.point_list_keys_unsorted,
+        binningState.point_list_unsorted,
+        radii,
+        grid)
+    CHECK_CUDA(, debug);
+
+    // int bit = getHigherMsb(H * W * D);
+    int bit = 0;
+
+    // Sort complete list of (duplicated) Gaussian indices by keys
+    CHECK_CUDA(cub::DeviceRadixSort::SortPairs(
+        binningState.list_sorting_space,
+        binningState.sorting_size,
+        binningState.point_list_keys_unsorted, binningState.point_list_keys,
+        binningState.point_list_unsorted, binningState.point_list,
+        num_rendered, 0, 32 + bit), debug)
+
+    CHECK_CUDA(cudaMemset(imgState.ranges, 0, H * W * D * sizeof(uint2)), debug);
+
+    // Identify start and end of per-tile workloads in sorted list
+    if (num_rendered > 0)
+        identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
+            num_rendered,
+            binningState.point_list_keys,
+            imgState.ranges);
+    CHECK_CUDA(, debug)
+
+    // Prepare voxel2pts mapping for inverse rendering
+    CHECK_CUDA(BACKWARD::preprocess(
+        N,
+        points_int,
+        grid,
+        voxel2pts
+    ), debug)
+
+    // Call inverse render
+    CHECK_CUDA(BACKWARD::inverse_render(
+        P,
+        geomState.point_offsets,
+        binningState.point_list_keys_unsorted,
+        voxel2pts,
+        H, W, D,
+        pts,
+        N,
+        means3D,
+        cov3D,
+        opacities,
+        occupancy_gt,
+        gaussian_semantic_mask), debug);
+    
+    return num_rendered;
+}

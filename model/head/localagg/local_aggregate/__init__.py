@@ -105,6 +105,41 @@ class _LocalAggregate(torch.autograd.Function):
 
         return grads
 
+
+def _local_aggregate_inverse_no_grad(
+    pts,
+    points_int,
+    means3D,
+    means3D_int,
+    opacity,
+    occupancy_gt,
+    cov3D,
+    radii,
+    H, W, D
+):
+    """
+    Inverse render function without gradient computation.
+    Used when gradients are not needed for inverse rendering.
+    """
+    # Restructure arguments the way that the C++ lib expects them
+    args = (
+        pts,
+        points_int,
+        means3D,
+        means3D_int,
+        opacity,
+        occupancy_gt,
+        cov3D,
+        radii,
+        H, W, D
+    )
+    # Invoke C++/CUDA inverse renderer without gradient tracking
+    with torch.no_grad():
+        gaussian_semantic_mask = _C.local_aggregate_inverse(*args)
+    
+    return gaussian_semantic_mask
+
+
 class LocalAggregator(nn.Module):
     def __init__(self, scale_multiplier, H, W, D, pc_min, grid_size, inv_softmax=False):
         super().__init__()
@@ -159,3 +194,82 @@ class LocalAggregator(nn.Module):
             return logits # n, c
         else:
             assert False
+
+    def inverse_render(
+        self,
+        pts,
+        means3D, 
+        opacities, 
+        occupancy_gt, 
+        scales, 
+        cov3D):
+        """
+        Inverse rendering function for Gaussian semantic mask generation
+        
+        Args:
+            pts: Sampled point coordinates (1, N, 3)
+            means3D: Gaussian means (1, G, 3)
+            opacities: Gaussian opacities (1, G)
+            occupancy_gt: Ground truth occupancy (1, N, C)
+            scales: Gaussian scales (1, G, 3)
+            cov3D: Gaussian covariance matrices (1, G, 3, 3)
+            
+        Returns:
+            gaussian_semantic_mask: Semantic mask for each Gaussian (G, C)
+        """
+        assert pts.shape[0] == 1
+        pts = pts.squeeze(0)
+        means3D = means3D.squeeze(0)
+        opacities = opacities.squeeze(0)
+        occupancy_gt = occupancy_gt.squeeze(0)
+        scales = scales.detach().squeeze(0)
+        cov3D = cov3D.squeeze(0)
+
+        # Ensure all tensors are on the same device and have correct data types
+        device = pts.device
+        dtype = pts.dtype
+        
+        points_int = ((pts - self.pc_min) / self.grid_size).to(torch.int32)
+        # Clamp points_int to valid range to prevent CUDA out-of-bounds access
+        points_int = torch.clamp(points_int, min=0)
+        points_int[:, 0] = torch.clamp(points_int[:, 0], max=self.H-1)
+        points_int[:, 1] = torch.clamp(points_int[:, 1], max=self.W-1)
+        points_int[:, 2] = torch.clamp(points_int[:, 2], max=self.D-1)
+        
+        means3D_int = ((means3D.detach() - self.pc_min) / self.grid_size).to(torch.int32)
+        # Clamp means3D_int to valid range
+        means3D_int = torch.clamp(means3D_int, min=0)
+        means3D_int[:, 0] = torch.clamp(means3D_int[:, 0], max=self.H-1)
+        means3D_int[:, 1] = torch.clamp(means3D_int[:, 1], max=self.W-1)
+        means3D_int[:, 2] = torch.clamp(means3D_int[:, 2], max=self.D-1)
+        
+        radii = torch.ceil(scales.max(dim=-1)[0] * self.scale_multiplier / self.grid_size).to(torch.int32)
+        # Ensure radii are at least 1 and not too large
+        radii = torch.clamp(radii, min=1, max=min(self.H, self.W, self.D))
+        
+        cov3D = cov3D.flatten(1)[:, [0, 4, 8, 1, 5, 2]]
+
+        # Ensure all tensors are contiguous and on the correct device
+        pts = pts.contiguous().to(device=device, dtype=dtype)
+        points_int = points_int.contiguous().to(device=device, dtype=torch.int32)
+        means3D = means3D.contiguous().to(device=device, dtype=dtype)
+        means3D_int = means3D_int.contiguous().to(device=device, dtype=torch.int32)
+        opacities = opacities.contiguous().to(device=device, dtype=dtype)
+        occupancy_gt = occupancy_gt.contiguous().to(device=device, dtype=dtype)
+        cov3D = cov3D.contiguous().to(device=device, dtype=dtype)
+        radii = radii.contiguous().to(device=device, dtype=torch.int32)
+
+        # Invoke C++/CUDA inverse rendering routine without gradient computation
+        gaussian_semantic_mask = _local_aggregate_inverse_no_grad(
+            pts,
+            points_int,
+            means3D,
+            means3D_int,
+            opacities,
+            occupancy_gt,
+            cov3D,
+            radii,
+            self.H, self.W, self.D
+        )
+
+        return gaussian_semantic_mask  # G, C

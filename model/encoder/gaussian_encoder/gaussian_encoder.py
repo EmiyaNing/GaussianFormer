@@ -16,6 +16,7 @@ class GaussianOccEncoder(BaseEncoder):
         deformable_model: dict,
         refine_layer: dict,
         mid_refine_layer: dict = None,
+        densify_layer: dict = None,
         spconv_layer: dict = None,
         num_decoder: int = 6,
         operation_order: Optional[List[str]] = None,
@@ -49,6 +50,7 @@ class GaussianOccEncoder(BaseEncoder):
             "ffn": [ffn, MODELS],
             "deformable": [deformable_model, MODELS],
             "refine": [refine_layer, MODELS],
+            "densify" : [densify_layer, MODELS],
             "mid_refine":[mid_refine_layer, MODELS],
             "spconv": [spconv_layer, MODELS],
         }
@@ -113,7 +115,17 @@ class GaussianOccEncoder(BaseEncoder):
                     anchor,
                     anchor_embed,
                 )
-            
+          
+                prediction.append({'gaussian': gaussian})
+                if i != len(self.operation_order) - 1:
+                    anchor_embed = self.anchor_encoder(anchor)
+            elif "densify" in op:
+                anchor, gaussian, instance_feature = self.layers[i](
+                    instance_feature,
+                    anchor,
+                    gaussian
+                )
+
                 prediction.append({'gaussian': gaussian})
                 if i != len(self.operation_order) - 1:
                     anchor_embed = self.anchor_encoder(anchor)
