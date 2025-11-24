@@ -531,7 +531,7 @@ def save_gaussian_point(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=Fa
         opas[:] = 1.
         mask = (pred != empty_label)
     else:
-        mask = (pred != empty_label) & (opas > 0.75)
+        mask = (pred != empty_label) & (opas > 0.1)
 
     if filter_zsize:
         if len(means) > 0:
