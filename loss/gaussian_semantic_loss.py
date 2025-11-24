@@ -3,9 +3,10 @@ import torch, torch.nn as nn
 import torch.nn.functional as F
 
 from torch.cuda.amp import autocast
+from mmseg.models.losses import DiceLoss
 
 from .base_loss import BaseLoss
-from .occupancy_loss import sigmoid_focal_loss
+from .occupancy_loss import sigmoid_focal_loss, CE_ssc_loss
 
 from . import OPENOCC_LOSS
 
@@ -22,10 +23,10 @@ class GaussianSemanticLoss(BaseLoss):
         self.class_weights = torch.tensor(manual_class_weight)
         self.input_dict = input_dict
         self.loss_func  = self.gaussian_semantic_loss
-        self.semantic_func = nn.CrossEntropyLoss(
-            reduction="mean"
+        self.semantic_func = DiceLoss(
+            class_weight=self.class_weights[:-1], loss_weight=2.0
         )
-        self.opacities_func = sigmoid_focal_loss
+        self.opacities_func = nn.SmoothL1Loss()
 
 
     def gaussian_semantic_loss(self, gaussian, sampled_label, sampled_xyz, empty_label=17):
@@ -58,6 +59,7 @@ class GaussianSemanticLoss(BaseLoss):
 
         filter_mask  = foreground_mask.sum(-1) > 0
         filter_semantics = semantics[filter_mask]
+        filter_opacities = opacities[filter_mask]
 
         gaussian_label  = frnn.frnn_gather(sampled_label.unsqueeze(-1), idxs).squeeze(-1)
         filter_gs_label = gaussian_label[filter_mask]
@@ -71,17 +73,21 @@ class GaussianSemanticLoss(BaseLoss):
             semantic_label[i] += cur_sem_counts
         
         semantic_label = semantic_label.permute(1, 0)
-        semantic_label = semantic_label / 27
+        semantic_value, semantic_label = semantic_label.max(dim=-1)
+
+        semantic_value = semantic_value / 27
 
         filter_semantics     = filter_semantics.softmax(dim=-1)
 
-        cls_weights   = self.class_weights.to(filter_semantics.device)
-        semantic_loss = self.semantic_func(filter_semantics * cls_weights[:-1], semantic_label* cls_weights[:-1])
-        #import pdb
-        #pdb.set_trace()
-        opacities_loss= self.opacities_func(opacities.squeeze(0), filter_mask.squeeze(0).long())
+        # caculate the dice loss for small size object
+        semantic_loss = self.semantic_func(filter_semantics, semantic_label)
 
-        total_loss = (semantic_loss + opacities_loss) * self.weight
+        # caculate the weighted bce loss for overall region
+        bce_semantics = filter_semantics.unsqueeze(0).permute(0, 2, 1)
+        bce_targets   = semantic_label.unsqueeze(0)
+        bce_loss   = CE_ssc_loss(bce_semantics, bce_targets, class_weights=self.class_weights[:-1].to(device))
+
+        total_loss = (semantic_loss + bce_loss) * self.weight
 
 
         return total_loss
