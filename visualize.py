@@ -213,6 +213,15 @@ def main(local_rank, args):
                         f'val_{i_iter_val}_gaussian',
                         **draw_gaussian_params
                     )
+                if args.vis_gaussian_each_stage:
+                    from vis_open3d_voxel import save_gaussian_point
+                    for gaussian in result_dict['gaussians']:
+                        save_gaussian_point(
+                            save_dir,
+                            gaussian,
+                            f'val_{i_iter_val}_gaussian',
+                            **draw_gaussian_params
+                        )
                 miou_metric._after_step(pred_occ, gt_occ)
             
             if i_iter_val % print_freq == 0 and local_rank == 0:
@@ -241,6 +250,7 @@ if __name__ == '__main__':
     parser.add_argument('--vis_scene_index', type=int, default=-1)
     parser.add_argument('--vis-scene', action='store_true', default=False)
     parser.add_argument('--vis_gaussian_point', action='store_true', default=False)
+    parser.add_argument('--vis-gaussian-each-stage', action='store_true', default=False)
     parser.add_argument('--epoch', type=int, default=0)
     parser.add_argument('--dataset', type=str, default='nusc')
     parser.add_argument('--model-type', type=str, default="base", choices=["base", "prob"])
