@@ -104,8 +104,9 @@ class BEVSegmentor(CustomBaseSegmentor):
             'points': points
         }
         results.update(kwargs)
-        outs = self.extract_img_feat(**results)
-        results.update(outs)
+        if self.img_backbone is not None:
+            outs = self.extract_img_feat(**results)
+            results.update(outs)
 
         # torch.cuda.synchronize()
         # start_time = time.perf_counter()

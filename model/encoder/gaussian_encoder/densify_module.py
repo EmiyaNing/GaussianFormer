@@ -88,7 +88,7 @@ class DensifyModule(BaseModule):
                 random_directions = torch.nn.functional.normalize(random_directions, dim=-1)
                 
                 # 计算偏移量：尺寸半径（使用平均尺度作为半径）
-                radius = densify_scales_b // 2
+                radius = densify_scales_b / 2.0
                 offset = random_directions * radius  # [M, 3]
                 
                 # 生成两个新位置：一个正向偏移，一个反向偏移

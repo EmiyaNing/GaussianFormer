@@ -19,11 +19,15 @@ class CustomBaseSegmentor(BaseModule):
         super().__init__(init_cfg)
         if img_backbone is not None:
             self.img_backbone = builder.build_backbone(img_backbone)
+        else:
+            self.img_backbone = None
         if img_neck is not None:
             try:
                 self.img_neck = builder.build_neck(img_neck)
             except:
                 self.img_neck = MODELS.build(img_neck)
+        else:
+            self.img_neck = None
         if lifter is not None:
             self.lifter = builder.build_head(lifter)
         if encoder is not None:

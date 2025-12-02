@@ -5,3 +5,4 @@ from .gaussian_initializer.resnet_secondfpn import ResNetSecondFPN
 from .gaussian_voxel_lifter import GaussianVoxelLifter
 from .gaussian_voxel_sp_lifter import GaussianVoxelSPLifter
 from .guassian_voxel_lifter_only import GaussianVoxelLifterOnly
+from .voxel_gaussian_lifter import GaussianVoxelLearnear
