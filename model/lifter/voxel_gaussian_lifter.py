@@ -164,6 +164,7 @@ class GaussianVoxelLearnear(BaseLifter):
     def decode_only_ctr_features(self, voxel_indices, voxel_features, spatial_shape, batch_size):
         xyz_list     = []
         feature_list = []
+        bs_masks      = []
         device       = voxel_indices.device
         
         spatial_shape= torch.tensor(spatial_shape[::-1], device=device)
@@ -178,8 +179,9 @@ class GaussianVoxelLearnear(BaseLifter):
                 normalized_xyz = safe_inverse_sigmoid(normalized_xyz)
             xyz_list.append(normalized_xyz)
             feature_list.append(cur_feats)
+            bs_masks.append(bs_mask)
 
-        return xyz_list, feature_list
+        return xyz_list, feature_list, bs_masks
 
 
 
@@ -200,26 +202,29 @@ class GaussianVoxelLearnear(BaseLifter):
 
         multi_voxel = voxel_dict['multi_scale_3d_features']
         stride_2 = multi_voxel['x_conv2']
-        anchor_stride2, feature_stride2 = self.decode_only_ctr_features(stride_2.indices, stride_2.features, stride_2.spatial_shape, batch_size)
+        anchor_stride2, feature_stride2, bs_mask2 = self.decode_only_ctr_features(stride_2.indices, stride_2.features, stride_2.spatial_shape, batch_size)
 
         stride_4 = multi_voxel['x_conv3']
-        anchor_stride4, feature_stride4 = self.decode_only_ctr_features(stride_4.indices, stride_4.features, stride_4.spatial_shape, batch_size)
+        anchor_stride4, feature_stride4, bs_mask4 = self.decode_only_ctr_features(stride_4.indices, stride_4.features, stride_4.spatial_shape, batch_size)
 
         stride_8 = multi_voxel['x_conv4']
-        anchor_stride8, feature_stride8 = self.decode_anchors_from_voxel(stride_8.indices, stride_8.features, stride_8.spatial_shape, batch_size)
+        anchor_stride8, feature_stride8, bs_mask8 = self.decode_only_ctr_features(stride_8.indices, stride_8.features, stride_8.spatial_shape, batch_size)
 
         multi_stride_features = dict(
             stride2 = dict(
                 center=anchor_stride2,
-                feature=feature_stride2
+                feature=feature_stride2,
+                bs_mask=bs_mask2
             ),
             stride4 = dict(
                 center=anchor_stride4,
                 feature=feature_stride4,
+                bs_mask=bs_mask4
             ),
             stride8 = dict(
                 center=anchor_stride8,
                 feature=feature_stride8,
+                bs_mask=bs_mask8
             )
         )
 
