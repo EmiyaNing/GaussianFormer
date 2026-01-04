@@ -82,7 +82,11 @@ class TopkDensifyModule(BaseModule):
             cur_rots  = rotations[b] # N, 4 
             cur_sems  = semantics[b] # N, 17
 
-            _, indices = torch.topk(cur_opa[:, 0], self.topk_count, dim=-1)
+            try:
+                _, indices = torch.topk(cur_opa[:, 0], self.topk_count, dim=-1)
+            except RuntimeError:
+                import pdb
+                pdb.set_trace()
             filter_feats  = cur_feats[indices]
             filter_opa    = cur_opa[indices]
             filter_scales = cur_scales[indices]

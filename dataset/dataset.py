@@ -136,11 +136,6 @@ class NuScenesDataset(Dataset):
         ego2global[:3, :3] = Quaternion(info['data']['LIDAR_TOP']['pose']['rotation']).rotation_matrix
         ego2global[:3, 3] = np.asarray(info['data']['LIDAR_TOP']['pose']['translation']).T
         lidar_points = self.load_lidar_points(info['data']['LIDAR_TOP']['filename'])
-        lidar_mask_x = (lidar_points[:, 0] > self.pc_range[0]) & (lidar_points[:, 0] < self.pc_range[3])
-        lidar_mask_y = (lidar_points[:, 1] > self.pc_range[1]) & (lidar_points[:, 1] < self.pc_range[4])
-        lidar_mask_z = (lidar_points[:, 2] > self.pc_range[2]) & (lidar_points[:, 2] < self.pc_range[5])
-        lidar_mask   = lidar_mask_x & lidar_mask_y & lidar_mask_z
-        lidar_points = lidar_points[lidar_mask] 
 
         for cam_type in self.sensor_types:
             image_paths.append(os.path.join(self.data_path, info['data'][cam_type]['filename']))
