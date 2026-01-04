@@ -538,6 +538,133 @@ class LoadOccupancySurroundOcc(object):
         repr_str = self.__class__.__name__
         return repr_str
 
+@OPENOCC_TRANSFORMS.register_module()
+class LoadOccupancyOcc3D(object):
+
+    def __init__(self, occ3d_path, semantic=True, use_ego=False, use_sweeps=False, perturb=False):
+        self.occ3d_path = occ3d_path
+        self.semantic = semantic
+        self.use_ego = use_ego
+        self.use_sweeps = use_sweeps
+        self.perturb = perturb
+
+        # 创建与SurroundOcc相同的3D网格坐标
+        xyz = self.get_meshgrid([-40, -40, -1.0, 40, 40, 5.4], [200, 200, 16], 0.4)
+        self.xyz = np.concatenate([xyz, np.ones_like(xyz[..., :1])], axis=-1)
+        
+        # 预加载映射关系
+        self.timestamp_to_sample = self._load_timestamp_to_sample()
+        self.scene_token_to_name = self._load_scene_token_to_name()
+
+
+    def _load_timestamp_to_sample(self):
+        """从sample.json加载时间戳到样本信息的映射"""
+        sample_json_path = "data/nuscenes/v1.0-trainval/sample.json"
+        timestamp_to_sample = {}
+        if os.path.exists(sample_json_path):
+            import json
+            with open(sample_json_path, 'r') as f:
+                samples = json.load(f)
+            for sample in samples:
+                timestamp = sample.get('timestamp')
+                if timestamp is not None:
+                    timestamp_to_sample[str(timestamp)] = sample
+        return timestamp_to_sample
+
+    def _load_scene_token_to_name(self):
+        """从scene.json加载scene_token到scene_name的映射"""
+        scene_json_path = "data/nuscenes/v1.0-trainval/scene.json"
+        scene_token_to_name = {}
+        if os.path.exists(scene_json_path):
+            import json
+            with open(scene_json_path, 'r') as f:
+                scenes = json.load(f)
+            for scene in scenes:
+                token = scene.get('token')
+                name = scene.get('name')
+                if token and name:
+                    scene_token_to_name[token] = name
+        return scene_token_to_name
+
+    def get_meshgrid(self, ranges, grid, reso):
+        xxx = torch.arange(grid[0], dtype=torch.float) * reso + 0.5 * reso + ranges[0]
+        yyy = torch.arange(grid[1], dtype=torch.float) * reso + 0.5 * reso + ranges[1]
+        zzz = torch.arange(grid[2], dtype=torch.float) * reso + 0.5 * reso + ranges[2]
+
+        xxx = xxx[:, None, None].expand(*grid)
+        yyy = yyy[None, :, None].expand(*grid)
+        zzz = zzz[None, None, :].expand(*grid)
+
+        xyz = torch.stack([
+            xxx, yyy, zzz
+        ], dim=-1).numpy()
+        return xyz
+
+    def __call__(self, results):
+        # 1. 获取时间戳（从LiDAR文件名中提取）
+        lidar_filename = results['pts_filename'].split('/')[-1]
+        # 从文件名提取时间戳：n015-2018-07-24-11-22-45+0800__LIDAR_TOP__1532402927647951.pcd.bin
+        timestamp_str = lidar_filename.split('__')[-1].split('.')[0]  # 1532402927647951
+        
+        # 2. 通过时间戳找到sample信息
+        sample_info = self.timestamp_to_sample.get(timestamp_str)
+        if not sample_info:
+            raise ValueError(f"时间戳 {timestamp_str} 在sample.json中未找到对应样本")
+        
+        frame_token = sample_info['token']
+        scene_token = sample_info['scene_token']
+        
+        # 3. 通过scene_token找到scene_name
+        scene_name = self.scene_token_to_name.get(scene_token)
+        if not scene_name:
+            raise ValueError(f"scene_token {scene_token} 在scene.json中未找到对应场景")
+        
+        # 4. 构建Occ3D标注路径
+        label_file = os.path.join(self.occ3d_path, scene_name, frame_token, "labels.npz")
+        
+        if os.path.exists(label_file):
+            # 加载Occ3D标注
+            labels = np.load(label_file)
+            semantics = labels['semantics'].astype(np.int64)
+            mask_camera = labels['mask_camera'].astype(bool)
+            mask_lidar = labels['mask_lidar'].astype(bool)
+            
+            # 保持与SurroundOcc相同的字段名
+            results['occ_label'] = semantics if self.semantic else (semantics != 17)
+            mask = semantics != 0
+            #results['occ_cam_mask'] = mask_camera & mask_lidar
+            results['occ_cam_mask']   = mask_camera 
+            results['occ_lidar_mask'] = mask_lidar
+            
+        elif self.use_sweeps:
+            # 处理sweep数据的情况
+            new_label = np.ones((200, 200, 16), dtype=np.int64) * 17
+            mask = new_label != 0
+            results['occ_label'] = new_label if self.semantic else (new_label != 17)
+            results['occ_cam_mask']   = mask 
+            results['occ_lidar_mask'] = mask
+        else:
+            raise FileNotFoundError(f"Occ3D标注文件不存在: {label_file}")
+
+        # 处理坐标数据（与SurroundOcc相同）
+        xyz = self.xyz.copy()
+        if getattr(self, "perturb", False):
+            norm_distribution = np.clip(np.random.randn(*xyz.shape[:-1], 3) / 6, -0.5, 0.5)
+            xyz[..., :3] = xyz[..., :3] + norm_distribution * 0.49
+
+        if not self.use_ego:
+            occ_xyz = xyz[..., :3]
+        else:
+            ego2lidar = np.linalg.inv(results['ego2lidar'])
+            occ_xyz = ego2lidar[None, None, None, ...] @ xyz[..., None]
+            occ_xyz = np.squeeze(occ_xyz, -1)[..., :3]
+        
+        results['occ_xyz'] = occ_xyz
+        return results
+
+    def __repr__(self):
+        return self.__class__.__name__
+
 
 @OPENOCC_TRANSFORMS.register_module()
 class LoadOccupancyKITTI360(object):
