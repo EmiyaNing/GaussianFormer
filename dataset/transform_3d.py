@@ -509,12 +509,12 @@ class LoadOccupancySurroundOcc(object):
             mask = new_label != 0
 
             results['occ_label'] = new_label if self.semantic else new_label != 17
-            results['occ_cam_mask'] = mask
+            results['occ_mask'] = mask
         elif self.use_sweeps:
             new_label = np.ones((200, 200, 16), dtype=np.int64) * 17
             mask = new_label != 0
             results['occ_label'] = new_label if self.semantic else new_label != 17
-            results['occ_cam_mask'] = mask
+            results['occ_mask'] = mask
         else:
             raise NotImplementedError
 
@@ -631,16 +631,18 @@ class LoadOccupancyOcc3D(object):
             
             # 保持与SurroundOcc相同的字段名
             results['occ_label'] = semantics if self.semantic else (semantics != 17)
-            mask = semantics != 0
+            mask = semantics != 17
             #results['occ_cam_mask'] = mask_camera & mask_lidar
+            results['occ_mask'] = mask
             results['occ_cam_mask']   = mask_camera 
             results['occ_lidar_mask'] = mask_lidar
             
         elif self.use_sweeps:
             # 处理sweep数据的情况
             new_label = np.ones((200, 200, 16), dtype=np.int64) * 17
-            mask = new_label != 0
+            mask = new_label != 17
             results['occ_label'] = new_label if self.semantic else (new_label != 17)
+            results['occ_mask']  = mask
             results['occ_cam_mask']   = mask 
             results['occ_lidar_mask'] = mask
         else:

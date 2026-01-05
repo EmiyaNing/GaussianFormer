@@ -4,6 +4,9 @@ _base_ = [
     '../_base_/surroundocc.py'
 ]
 
+# dataset label
+dataset_name_flag = 'occ3d'
+
 # =========== data config ==============
 input_shape = (1600, 864)
 data_aug_conf = {
@@ -119,6 +122,8 @@ num_decoder = 2
 num_single_frame_decoder = 1
 num_densify_frame_decoder= 1
 pc_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
+pc_range_voxel_backbone = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
+grid_size_voxel_backbone= 0.5
 scale_range = [0.08, 0.64]
 xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
@@ -154,6 +159,8 @@ model = dict(
         semantics=semantics,
         semantic_dim=semantic_dim,
         include_opa=include_opa,
+        pc_range=pc_range_voxel_backbone,
+        voxel_size=grid_size_voxel_backbone,
     ),
     encoder=dict(
         type='GaussianOccEncoder',

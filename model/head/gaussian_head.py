@@ -146,7 +146,8 @@ class GaussianHead(BaseTaskHead):
         density = []
         occ_xyz = metas['occ_xyz'].to(self.zero_tensor.device)
         occ_label = metas['occ_label'].to(self.zero_tensor.device)
-        occ_cam_mask = metas['occ_cam_mask'].to(self.zero_tensor.device)
+        occ_cam_mask = metas['occ_cam_mask'].to(self.zero_tensor.device) if 'occ_cam_mask' in metas.keys() else None
+        occ_mask     = metas['occ_mask'].to(self.zero_tensor.device) if 'occ_mask' in metas.keys() else None
         sampled_xyz, sampled_label = self._sampling(occ_xyz, occ_label, None)
         for idx in apply_loss_layers:
             gaussians = representation[idx]['gaussian']
@@ -190,7 +191,8 @@ class GaussianHead(BaseTaskHead):
             'density': density,
             'sampled_label': sampled_label,
             'sampled_xyz': sampled_xyz,
-            'occ_mask': occ_cam_mask,
+            'occ_mask': occ_mask,
+            'occ_cam_mask': occ_cam_mask,
             'final_occ': final_prediction,
             'gaussian': representation[-1]['gaussian'],
             'gaussians': [r['gaussian'] for r in representation]

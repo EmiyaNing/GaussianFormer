@@ -122,14 +122,27 @@ def main(local_rank, args):
         
     print_freq = cfg.print_freq
     from misc.metric_util import MeanIoU
-    miou_metric = MeanIoU(
-        list(range(1, 17)),
-        17, #17,
-        ['barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
-         'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
-         'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
-         'vegetation'],
-         True, 17, filter_minmax=False)
+    if cfg.dataset_name_flag == 'surroundocc':
+        miou_metric = MeanIoU(
+            list(range(1, 17)),
+            17, #17,
+            ['barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
+            'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
+            'vegetation'],
+            True, 17, filter_minmax=False)
+    elif cfg.dataset_name_flag == 'occ3d':
+        miou_metric = MeanIoU(
+            list(range(17)),
+            17, #17,
+            ['others', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
+            'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
+            'vegetation'],
+            True, 17, filter_minmax=False)
+    else:
+        print("Not emplement this dataset:", cfg.dataset_name_flag)
+        exit(0)
     miou_metric.reset()
 
     my_model.eval()
@@ -148,18 +161,9 @@ def main(local_rank, args):
                     pred_occ = pred
                     gt_occ = result_dict['sampled_label'][idx]
                     occ_mask = result_dict['occ_mask'][idx].flatten()
-                    # if args.vis_occ:
-                    #     os.makedirs(os.path.join(args.work_dir, 'vis'), exist_ok=True)
-                    #     save_occ(
-                    #         os.path.join(args.work_dir, 'vis'),
-                    #         pred_occ.reshape(1, 200, 200, 16),
-                    #         f'val_{i_iter_val}_pred',
-                    #         True, 0)
-                    #     save_occ(
-                    #         os.path.join(args.work_dir, 'vis'),
-                    #         gt_occ.reshape(1, 200, 200, 16),
-                    #         f'val_{i_iter_val}_gt',
-                    #         True, 0)
+                    # for occ3d we use the camera mask to valid the model's predictions.
+                    if 'occ_cam_mask' in result_dict.keys():
+                        occ_mask = result_dict['occ_cam_mask']
                     miou_metric._after_step(pred_occ, gt_occ, occ_mask)
                     # breakpoint()
             

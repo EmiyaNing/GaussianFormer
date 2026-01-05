@@ -179,14 +179,27 @@ def main(local_rank, args):
     grad_accumulation = args.gradient_accumulation
     grad_norm = 0
     from misc.metric_util import MeanIoU
-    miou_metric = MeanIoU(
-        list(range(1, 17)),
-        17, #17,
-        ['barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
-         'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
-         'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
-         'vegetation'],
-         True, 17, filter_minmax=False)
+    if cfg.dataset_name_flag == 'surroundocc':
+        miou_metric = MeanIoU(
+            list(range(1, 17)),
+            17, #17,
+            ['barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
+            'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
+            'vegetation'],
+            True, 17, filter_minmax=False)
+    elif cfg.dataset_name_flag == 'occ3d':
+        miou_metric = MeanIoU(
+            list(range(17)),
+            17, #17,
+            ['others', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
+            'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
+            'vegetation'],
+            True, 17, filter_minmax=False)
+    else:
+        print("Not emplement this dataset:", cfg.dataset_name_flag)
+        exit(0)
     miou_metric.reset()
 
     while epoch < max_num_epochs:
