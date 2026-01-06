@@ -51,6 +51,9 @@ class MeanIoU:
                 targets = targets[masks]
         else:
             if mask is not None:
+                # the occ3d's camera mask
+                if mask.shape[0] != outputs.shape[0]:
+                    mask = mask[0].reshape(-1)
                 outputs = outputs[mask]
                 targets = targets[mask]
 
