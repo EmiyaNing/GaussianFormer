@@ -6,7 +6,7 @@ _base_ = [
 
 # dataset label
 dataset_name_flag = 'occ3d'
-
+pc_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
 # =========== data config ==============
 input_shape = (1600, 864)
 data_aug_conf = {
@@ -31,7 +31,7 @@ img_norm_cfg = dict(
 )
 train_pipeline = [
     dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadOccupancyOcc3D", occ3d_path=occ3d_path, semantic=True, use_ego=False),  # 使用新的Occ3D加载器
+    dict(type="LoadOccupancyOcc3D", occ3d_path=occ3d_path, semantic=True, use_ego=False, pc_range=pc_range, grid_size=0.4),  # 使用新的Occ3D加载器
     dict(type="ResizeCropFlipImage"),
     dict(type="PhotoMetricDistortionMultiViewImage"),
     dict(type="NormalizeMultiviewImage", **img_norm_cfg),
@@ -41,7 +41,7 @@ train_pipeline = [
 
 test_pipeline = [
     dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadOccupancyOcc3D", occ3d_path=occ3d_path, semantic=True, use_ego=False),  # 使用新的Occ3D加载器
+    dict(type="LoadOccupancyOcc3D", occ3d_path=occ3d_path, semantic=True, use_ego=False, pc_range=pc_range, grid_size=0.4),  # 使用新的Occ3D加载器
     dict(type="ResizeCropFlipImage"),
     dict(type="NormalizeMultiviewImage", **img_norm_cfg),
     dict(type="DefaultFormatBundle"),
@@ -56,7 +56,7 @@ train_dataset_config = dict(
     imageset=anno_root + "nuscenes_infos_train_sweeps_occ.pkl",
     data_aug_conf=data_aug_conf,
     pipeline=train_pipeline,
-    pc_range=[-40.0, -40.0, -1.0, 40.0, 40.0, 5.4],
+    occ3d=True,
     phase='train'
 )
 
@@ -66,7 +66,7 @@ val_dataset_config = dict(
     imageset=anno_root + "nuscenes_infos_val_sweeps_occ.pkl",
     data_aug_conf=data_aug_conf,
     pipeline=test_pipeline,
-    pc_range=[-40.0, -40.0, -1.0, 40.0, 40.0, 5.4],
+    occ3d=True,
     phase='val'
 )
 
@@ -121,9 +121,6 @@ embed_dims = 128
 num_decoder = 2
 num_single_frame_decoder = 1
 num_densify_frame_decoder= 1
-pc_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
-pc_range_voxel_backbone = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
-grid_size_voxel_backbone= 0.5
 scale_range = [0.08, 0.64]
 xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
@@ -159,8 +156,8 @@ model = dict(
         semantics=semantics,
         semantic_dim=semantic_dim,
         include_opa=include_opa,
-        pc_range=pc_range_voxel_backbone,
-        voxel_size=grid_size_voxel_backbone,
+        pc_range=pc_range,
+        voxel_size=0.4,
     ),
     encoder=dict(
         type='GaussianOccEncoder',

@@ -509,12 +509,12 @@ class LoadOccupancySurroundOcc(object):
             mask = new_label != 0
 
             results['occ_label'] = new_label if self.semantic else new_label != 17
-            results['occ_mask'] = mask
+            results['occ_cam_mask'] = mask
         elif self.use_sweeps:
             new_label = np.ones((200, 200, 16), dtype=np.int64) * 17
             mask = new_label != 0
             results['occ_label'] = new_label if self.semantic else new_label != 17
-            results['occ_mask'] = mask
+            results['occ_cam_mask'] = mask
         else:
             raise NotImplementedError
 
@@ -541,7 +541,12 @@ class LoadOccupancySurroundOcc(object):
 @OPENOCC_TRANSFORMS.register_module()
 class LoadOccupancyOcc3D(object):
 
-    def __init__(self, occ3d_path, semantic=True, use_ego=False, use_sweeps=False, perturb=False):
+    def __init__(self, 
+                 occ3d_path, 
+                 semantic=True, 
+                 pc_range=[-50.0, -50.0, -5.0, 50.0, 50.0, 3.0], 
+                 grid_size=0.5, 
+                 use_ego=False, use_sweeps=False, perturb=False):
         self.occ3d_path = occ3d_path
         self.semantic = semantic
         self.use_ego = use_ego
@@ -549,7 +554,7 @@ class LoadOccupancyOcc3D(object):
         self.perturb = perturb
 
         # 创建与SurroundOcc相同的3D网格坐标
-        xyz = self.get_meshgrid([-40, -40, -1.0, 40, 40, 5.4], [200, 200, 16], 0.4)
+        xyz = self.get_meshgrid(pc_range, [200, 200, 16], grid_size)
         self.xyz = np.concatenate([xyz, np.ones_like(xyz[..., :1])], axis=-1)
         
         # 预加载映射关系

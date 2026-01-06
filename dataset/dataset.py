@@ -20,6 +20,7 @@ class NuScenesDataset(Dataset):
         pipeline=None,
         vis_indices=None,
         pc_range=[-50.0, -50.0, -5.0, 50.0, 50.0, 3.0],
+        occ3d=False,
         num_samples=0,
         vis_scene_index=-1,
         phase='train',
@@ -47,6 +48,7 @@ class NuScenesDataset(Dataset):
         self.data_aug_conf = data_aug_conf
         self.pc_range  = pc_range
         self.test_mode = (phase != 'train')
+        self.occ3d = occ3d
         self.pipeline = []
         for t in pipeline:
             self.pipeline.append(OPENOCC_TRANSFORMS.build(t))
@@ -136,6 +138,19 @@ class NuScenesDataset(Dataset):
         ego2global[:3, :3] = Quaternion(info['data']['LIDAR_TOP']['pose']['rotation']).rotation_matrix
         ego2global[:3, 3] = np.asarray(info['data']['LIDAR_TOP']['pose']['translation']).T
         lidar_points = self.load_lidar_points(info['data']['LIDAR_TOP']['filename'])
+        if self.occ3d:
+            lidar_reflect = lidar_points[:, 2:3]
+            lidar_points[:, 3] = 1.0
+            lidar_points = lidar2ego[None, ...] @ lidar_points[..., None]
+            lidar_points = np.squeeze(lidar_points, axis=-1)
+            lidar_points = lidar_points[:, :3]
+            mask_x = (lidar_points[:, 0] > self.pc_range[0]) & (lidar_points[:, 0] < self.pc_range[3])
+            mask_y = (lidar_points[:, 1] > self.pc_range[1]) & (lidar_points[:, 1] < self.pc_range[4])
+            mask_z = (lidar_points[:, 2] > self.pc_range[2]) & (lidar_points[:, 2] < self.pc_range[5])
+            mask = mask_x & mask_y & mask_z
+            lidar_points = lidar_points[mask]
+            lidar_reflect= lidar_reflect[mask]
+            lidar_points = np.concatenate([lidar_points, lidar_reflect], axis=-1)
 
         for cam_type in self.sensor_types:
             image_paths.append(os.path.join(self.data_path, info['data'][cam_type]['filename']))
@@ -185,5 +200,6 @@ class NuScenesDataset(Dataset):
         points = np.fromfile(lidar_path, dtype=np.float32)
         points = points.reshape(-1, 5)  # NuScenes: x, y, z, intensity, ring_index
         points = points[:, :4]
+        #points[:, 3] = 1.0
     
         return points

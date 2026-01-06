@@ -177,6 +177,37 @@ def main(local_rank, args):
             
             # breakpoint()
             result_dict = my_model(imgs=input_imgs, metas=data)
+            if args.vis_gaussian_gt:
+                gaussian_ctr = result_dict['gaussian'].means[0]
+                gt_occ = result_dict['sampled_label'][0]
+                from vis_open3d_voxel import get_grid_coords
+                grids = get_grid_coords([200, 200, 16], [0.4, 0.4, 0.4])
+                grids = torch.tensor(grids, device=gaussian_ctr.device) - torch.tensor([40, 40, 1], device=gaussian_ctr.device)
+                occ_mask = gt_occ < 17
+                gt_grid_occ = grids[occ_mask]
+                cated_points = torch.cat([gaussian_ctr, gt_grid_occ], dim=0)
+                color_gauss  = torch.ones_like(gaussian_ctr, dtype=torch.float32) * torch.tensor([1.0, 1.0, 1.0], device=gt_occ.device)
+                color_gts    = torch.ones_like(gt_grid_occ, dtype=torch.float32) * torch.tensor([0, 1.0, 1.0], device=gt_occ.device)
+                cated_colors = torch.cat([color_gauss, color_gts], dim=0)
+
+                origin_poitns= data['lidar_points'][0][:, :3]
+                origin_mask_x= (origin_poitns[:, 0] > -40) & (origin_poitns[:, 0] < 40)
+                origin_mask_y= (origin_poitns[:, 1] > -40) & (origin_poitns[:, 1] < 40)
+                origin_mask_z= (origin_poitns[:, 2] > -1) & (origin_poitns[:, 2] < 5.4)
+                origin_mask = origin_mask_x & origin_mask_y & origin_mask_z
+                filter_points= origin_poitns[origin_mask]
+
+
+
+                cated_points = torch.cat([cated_points, filter_points], dim=0)
+                color_points = torch.ones_like(filter_points, dtype=torch.float32) * torch.tensor([1.0, 1.0, 0], device=gt_occ.device)
+                cated_colors = torch.cat([cated_colors, color_points], dim=0)
+
+                from open3d_vis_utils import draw_scenes
+                draw_scenes(points=cated_points.detach().cpu().numpy(), point_colors=cated_colors.detach().cpu().numpy())
+            
+            #import pdb
+            #pdb.set_trace()
             for idx, pred in enumerate(result_dict['final_occ']):
                 pred_occ = pred
                 gt_occ = result_dict['sampled_label'][idx]
@@ -254,6 +285,7 @@ if __name__ == '__main__':
     parser.add_argument('--epoch', type=int, default=0)
     parser.add_argument('--dataset', type=str, default='nusc')
     parser.add_argument('--model-type', type=str, default="base", choices=["base", "prob"])
+    parser.add_argument('--vis-gaussian-gt', action='store_true', default=False)
     args = parser.parse_args()
     
     ngpus = torch.cuda.device_count()
