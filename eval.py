@@ -5,6 +5,7 @@
 import time, argparse, os.path as osp, os
 import torch, numpy as np
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from mmengine import Config
 from mmengine.runner import set_random_seed
@@ -121,8 +122,8 @@ def main(local_rank, args):
                 refine_load_from_sd(state_dict), strict=False))
         
     print_freq = cfg.print_freq
-    from misc.metric_util import MeanIoU
     if cfg.dataset_name_flag == 'surroundocc':
+        from misc.metric_util import MeanIoU
         miou_metric = MeanIoU(
             list(range(1, 17)),
             17, #17,
@@ -131,19 +132,17 @@ def main(local_rank, args):
             'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
             'vegetation'],
             True, 17, filter_minmax=False)
+        miou_metric.reset()
     elif cfg.dataset_name_flag == 'occ3d':
-        miou_metric = MeanIoU(
-            list(range(17)),
-            17, #17,
-            ['others', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
-            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
-            'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
-            'vegetation'],
-            True, 17, filter_minmax=False)
+        from misc.occ3d_nus_metrics import Metric_mIoU
+        miou_metric = Metric_mIoU(
+                    num_classes=18,
+                    use_lidar_mask=False,
+                    use_image_mask=True)
     else:
         print("Not emplement this dataset:", cfg.dataset_name_flag)
         exit(0)
-    miou_metric.reset()
+    
 
     my_model.eval()
     os.environ['eval'] = 'true'
@@ -162,17 +161,31 @@ def main(local_rank, args):
                     gt_occ = result_dict['sampled_label'][idx]
                     if cfg.dataset_name_flag == 'surroundocc':
                         occ_mask = result_dict['occ_cam_mask'][idx].flatten()
+                        miou_metric._after_step(pred_occ, gt_occ, occ_mask)
                     elif cfg.dataset_name_flag == 'occ3d':
-                        occ_mask = result_dict['occ_cam_mask']
-                    miou_metric._after_step(pred_occ, gt_occ, occ_mask)
+                        #if cfg.eval_mask_flag:
+                        #    occ_mask = result_dict['occ_cam_mask']
+                        #else:
+                        #    occ_mask = result_dict['occ_mask']
+                        #import pdb
+                        #pdb.set_trace()
+                        pred_occ = pred_occ.reshape(200, 200, 16).cpu().numpy()
+                        gt_occ   = gt_occ.reshape(200, 200, 16).cpu().numpy()
+                        occ_cam_mask = result_dict['occ_cam_mask'].squeeze(0).cpu().numpy()
+                        miou_metric.add_batch(pred_occ, gt_occ, result_dict['occ_mask'], occ_cam_mask)
                     # breakpoint()
             
             if i_iter_val % print_freq == 0 and local_rank == 0:
                 logger.info('[EVAL] Iter %5d'%(i_iter_val))
-                    
-    miou, iou2 = miou_metric._after_epoch()
-    logger.info(f'mIoU: {miou}, iou2: {iou2}')
-    miou_metric.reset()
+
+    if cfg.dataset_name_flag == 'surroundocc':       
+        miou, iou2 = miou_metric._after_epoch()
+        logger.info(f'mIoU: {miou}, iou2: {iou2}')
+        miou_metric.reset()
+    elif cfg.dataset_name_flag == 'occ3d':
+        eval_results = miou_metric.count_miou_metric()
+        logger.info(eval_results)
+
     
     if writer is not None:
         writer.close()

@@ -336,7 +336,10 @@ def main(local_rank, args):
                         if cfg.dataset_name_flag == 'surroundocc':
                             occ_mask = result_dict['occ_cam_mask'][idx].flatten()
                         elif cfg.dataset_name_flag == 'occ3d':
-                            occ_mask = result_dict['occ_cam_mask']
+                            if cfg.eval_mask_flag:
+                                occ_mask = result_dict['occ_cam_mask']
+                            else:
+                                occ_mask = result_dict['occ_mask']
                         miou_metric._after_step(pred_occ, gt_occ, occ_mask)
                 
                 val_loss_list.append(loss.detach().cpu().numpy())

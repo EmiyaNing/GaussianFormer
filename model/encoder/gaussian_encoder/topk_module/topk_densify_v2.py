@@ -1,14 +1,15 @@
+import frnn
 from mmengine.registry import MODELS
 from mmengine.model import BaseModule
 from mmcv.cnn import Scale
 import torch.nn as nn, torch
 import torch.nn.functional as F
-from .utils import linear_relu_ln, GaussianPrediction
-from ...utils.safe_ops import safe_sigmoid
+from ..utils import linear_relu_ln, GaussianPrediction
+from ....utils.safe_ops import safe_sigmoid
 
 
 @MODELS.register_module()
-class TopkDensifyModule(BaseModule):
+class DensifyOnly(BaseModule):
     '''
     Current version densify module only densify the most valueable topk gaussian ball.
         The topk count can be seted mannual.
@@ -22,21 +23,27 @@ class TopkDensifyModule(BaseModule):
         pc_range=None,
         scale_range=None,
         unit_xyz=None,
+        K=27,
         **kwargs,
     ):
-        super(TopkDensifyModule, self).__init__()
+        super(DensifyOnly, self).__init__()
         self.topk_count = topk_count
         self.pc_range   = pc_range
         self.scale_range= scale_range
         unit_prob = [unit_xyz[i] / (pc_range[i + 3] - pc_range[i]) for i in range(3)]
         unit_prob = [4 * unit_prob[i] for i in range(3)]
         self.unit_sigmoid = unit_prob
+        self.K = K
+
+        #self.feature_agg  = nn.AvgPool2d([1, K], [1, K])
 
         self.feature_proj = nn.Sequential(
             nn.Linear(feat_embed_dim, feat_embed_dim),
             nn.LayerNorm(feat_embed_dim),
             nn.GELU()
         )
+
+
 
         self.location_shift = nn.Linear(feat_embed_dim, 3)
         self.rotation_shift = nn.Linear(feat_embed_dim, 4)
@@ -81,6 +88,7 @@ class TopkDensifyModule(BaseModule):
             cur_scales= scales[b]    # N, 3
             cur_rots  = rotations[b] # N, 4 
             cur_sems  = semantics[b] # N, 17
+            cur_anchor= anchor[b]
 
             try:
                 _, indices = torch.topk(cur_opa[:, 0], self.topk_count, dim=-1)
@@ -93,8 +101,8 @@ class TopkDensifyModule(BaseModule):
             filter_rots   = cur_rots[indices]
             filter_sems   = cur_sems[indices]
             filter_means  = cur_means[indices]
-
-
+            filter_anchor = cur_anchor[indices]
+        
             densified_feats = self.feature_proj(filter_feats)
             new_features.append(densified_feats)
 
@@ -117,12 +125,12 @@ class TopkDensifyModule(BaseModule):
             rots_shift_out  = F.normalize(self.rotation_shift(densified_feats))
             sem_shift_out   = self.semantic_shift(densified_feats)
             opa_shift_out   = self.opacities_shift(densified_feats)
-            new_outputs.append(torch.cat([mean_shift_out, scale_shift_out, rots_shift_out, opa_shift_out, sem_shift_out], dim=-1))
+            
 
 
 
             means_shift = (safe_sigmoid(mean_shift_out) - 0.5) * 2 # shift the center of gaussian ball
-            scale_shift = (safe_sigmoid(scale_shift_out) - 0.5) * 2    # shift the scale of each gaussian ball
+            scale_shift = safe_sigmoid(scale_shift_out) 
             rots_shift  = rots_shift_out
             sem_shift   = safe_sigmoid(sem_shift_out)
             opa_shift   = safe_sigmoid(opa_shift_out)
@@ -132,15 +140,24 @@ class TopkDensifyModule(BaseModule):
             cur_new_means_y = torch.clamp(cur_new_means[:, 1], self.pc_range[1], self.pc_range[4])
             cur_new_means_z = torch.clamp(cur_new_means[:, 2], self.pc_range[2], self.pc_range[5])
             cur_new_means = torch.stack([cur_new_means_x, cur_new_means_y, cur_new_means_z], dim=-1)
+            cur_new_xyz_output = safe_sigmoid(cur_new_means)
 
-            cur_new_scales = filter_scales + filter_scales * scale_shift
+            cur_new_scales = filter_scales * scale_shift
             cur_new_scales = torch.clamp(cur_new_scales, self.scale_range[0], self.scale_range[1])
+
+            # update the anchor output
+            cur_scale_out  = filter_anchor[:, 3:6] * scale_shift
+            cur_rots_out   = filter_anchor[:, 6:10] / 2 + rots_shift_out / 2
+            cur_opas_out   = filter_anchor[:, 10:11] / 2 + opa_shift_out / 2
+            cur_sems_out   = filter_anchor[:, 11:] / 2 + sem_shift_out / 2
+    
 
             new_means.append(cur_new_means)
             new_scales.append(cur_new_scales)
             new_rotations.append(filter_rots / 2 + rots_shift / 2)
-            new_semantics.append(filter_sems * sem_shift)
-            new_opacitices.append(filter_opa * opa_shift)
+            new_semantics.append(filter_sems / 2 + sem_shift / 2)
+            new_opacitices.append(filter_opa / 2 + opa_shift / 2)
+            new_outputs.append(torch.cat([cur_new_xyz_output, cur_scale_out, cur_rots_out, cur_opas_out, cur_sems_out], dim=-1))
 
         new_features = torch.stack(new_features)
         new_outputs  = torch.stack(new_outputs)
