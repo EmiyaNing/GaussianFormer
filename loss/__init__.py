@@ -7,3 +7,4 @@ from .bce_loss import BinaryCrossEntropyLoss, PixelDistributionLoss
 from .gaussian_converageloss import GaussianCoverageLoss
 from .gaussian_semantic_loss import GaussianSemanticLoss
 from .gaussian_semantic_mult_loss import GaussianSemanticMultLoss
+from .photometric_loss import RenderLoss
