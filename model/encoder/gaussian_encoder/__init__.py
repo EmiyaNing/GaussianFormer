@@ -1,13 +1,12 @@
 from .deformable_module import SparseGaussian3DKeyPointsGenerator, DeformableFeatureAggregation
 from .refine_module import SparseGaussian3DRefinementModule
-from .refine_module_v2 import SparseGaussian3DRefinementModuleV2
 from .spconv3d_module import SparseConv3D
 from .anchor_encoder_module import SparseGaussian3DEncoder
 from .ffn_module import AsymmetricFFN
 from .gaussian_encoder import GaussianOccEncoder
-from .refine_densify_module import Gaussian3DDensifyModule
 from .densify_module import DensifyModule
 from .topk_densify_module import TopkDensifyModule
 from .voxel_query_module import VoxelQueryModule
 from .topk_module.topk_semantic_densify import SemanticDensify
 from .topk_module.topk_densify_v2 import DensifyOnly
+from .gaussian_photo import GaussianPhoto

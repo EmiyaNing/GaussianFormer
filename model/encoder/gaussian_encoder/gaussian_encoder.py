@@ -19,6 +19,7 @@ class GaussianOccEncoder(BaseEncoder):
         densify_layer: dict = None,
         spconv_layer: dict = None,
         voxel_query_layer: dict = None,
+        gaussian_photo: dict = None,
         num_decoder: int = 6,
         operation_order: Optional[List[str]] = None,
         init_cfg=None,
@@ -55,6 +56,7 @@ class GaussianOccEncoder(BaseEncoder):
             "mid_refine":[mid_refine_layer, MODELS],
             "spconv": [spconv_layer, MODELS],
             "query": [voxel_query_layer, MODELS],
+            "photo": [gaussian_photo, MODELS],
         }
         self.layers = nn.ModuleList(
             [
@@ -93,6 +95,7 @@ class GaussianOccEncoder(BaseEncoder):
         anchor_embed = self.anchor_encoder(anchor)
 
         prediction = []
+        render_imgs= []
         for i, op in enumerate(self.operation_order):
             if op == 'spconv':
                 instance_feature = self.layers[i](
@@ -138,7 +141,15 @@ class GaussianOccEncoder(BaseEncoder):
                     instance_feature,
                     multi_stride_features
                 )
+            elif "photo" in op:
+                rendered_img = self.layers[i](
+                    kwargs['imgs'],
+                    metas['mask_img'],
+                    gaussian,
+                    metas
+                )
+                render_imgs.append(rendered_img)
             else:
                 raise NotImplementedError(f"{op} is not supported.")
 
-        return {"representation": prediction}
+        return {"representation": prediction, "render_imgs": render_imgs}

@@ -5,9 +5,9 @@ _base_ = [
 ]
 
 # =========== data config ==============
-input_shape = (1600, 864)
+input_shape = (800, 320)
 data_aug_conf = {
-    "resize_lim": (0.5, 0.5),
+    "resize_lim": (0.5, 0.47),
     "final_dim": input_shape[::-1],
     "bot_pct_lim": (0.0, 0.0),
     "rot_lim": (0.0, 0.0),
@@ -16,40 +16,10 @@ data_aug_conf = {
     "rand_flip": True,
 }
 val_dataset_config = dict(
-    data_aug_conf=data_aug_conf,
-    return_keys=[
-        'img',
-        'projection_mat',
-        'image_wh',
-        'occ_label',
-        'occ_xyz',
-        'occ_cam_mask',
-        'ori_img',
-        'cam_positions',
-        'focal_positions',
-        'lidar_points',
-        'lidar_pose',
-        'ego_pose',
-        'mask_img'
-    ]
+    data_aug_conf=data_aug_conf
 )
 train_dataset_config = dict(
-    data_aug_conf=data_aug_conf,
-    return_keys=[
-        'img',
-        'projection_mat',
-        'image_wh',
-        'occ_label',
-        'occ_xyz',
-        'occ_cam_mask',
-        'ori_img',
-        'cam_positions',
-        'focal_positions',
-        'lidar_points',
-        'lidar_pose',
-        'ego_pose',
-        'mask_img'
-    ]
+    data_aug_conf=data_aug_conf
 )
 # =========== misc config ==============
 optimizer = dict(
@@ -104,27 +74,42 @@ scale_range = [0.08, 0.64]
 xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
 include_opa = True
-load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
+load_from = 'ckpts/raydn_eva02_800_bs2_seq_24e.pth'
 semantics = True
 semantic_dim = 17
+
+
+sim_fpn=dict(
+        scale_factors=[4, 2, 1, 0.5],
+        in_channels=1024,
+        out_channels=256,
+        out_indices=[2, 3, 4, 5],
+        )
 
 model = dict(
     img_backbone_out_indices=[0, 1, 2, 3],
     img_backbone=dict(
-        _delete_=True,
-        type='ResNet',
-        depth=50,
-        num_stages=4,
-        out_indices=(0, 1, 2, 3),
-        frozen_stages=1,
-        norm_cfg=dict(type='BN2d', requires_grad=False),
-        norm_eval=True,
-        style='caffe',
-        with_cp = True,),
+        type='EVAViT',
+        img_size=320, # img_size for short side
+        patch_size=16,
+        window_size=16,
+        global_window_size=20, # If use square image (e.g., set global_window_size=0, else global_window_size=img_size // 16)
+        in_chans=3,
+        embed_dim=1024,
+        depth=24,
+        num_heads=16,
+        mlp_ratio=4*2/3,
+        window_block_indexes = (
+        list(range(0, 2)) + list(range(3, 5)) + list(range(6, 8)) + list(range(9, 11)) + list(range(12, 14)) + list(range(15, 17)) + list(range(18, 20)) + list(range(21, 23))
+        ),
+        sim_fpn=sim_fpn,
+        qkv_bias=True,
+        drop_path_rate=0.3,
+        with_cp=True,
+        flash_attn=True,),
         #dcn=dict(type='DCNv2', deform_groups=1, fallback_on_stride=False), # original DCNv2 will print log when perform load_state_dict
         #stage_with_dcn=(False, False, True, True)),
-    img_neck=dict(
-        start_level=1),
+    img_neck=None,
     lifter=dict(
         type='GaussianVoxelLearnear',
         num_anchor=25600,

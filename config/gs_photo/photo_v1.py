@@ -7,7 +7,7 @@ _base_ = [
 # =========== data config ==============
 input_shape = (1600, 864)
 data_aug_conf = {
-    "resize_lim": (0.5, 0.5),
+    "resize_lim": (1.0, 1.0),
     "final_dim": input_shape[::-1],
     "bot_pct_lim": (0.0, 0.0),
     "rot_lim": (0.0, 0.0),
@@ -17,39 +17,9 @@ data_aug_conf = {
 }
 val_dataset_config = dict(
     data_aug_conf=data_aug_conf,
-    return_keys=[
-        'img',
-        'projection_mat',
-        'image_wh',
-        'occ_label',
-        'occ_xyz',
-        'occ_cam_mask',
-        'ori_img',
-        'cam_positions',
-        'focal_positions',
-        'lidar_points',
-        'lidar_pose',
-        'ego_pose',
-        'mask_img'
-    ]
 )
 train_dataset_config = dict(
     data_aug_conf=data_aug_conf,
-    return_keys=[
-        'img',
-        'projection_mat',
-        'image_wh',
-        'occ_label',
-        'occ_xyz',
-        'occ_cam_mask',
-        'ori_img',
-        'cam_positions',
-        'focal_positions',
-        'lidar_points',
-        'lidar_pose',
-        'ego_pose',
-        'mask_img'
-    ]
 )
 # =========== misc config ==============
 optimizer = dict(
@@ -85,14 +55,19 @@ loss = dict(
                 1.01552756, 1.06897009, 1.30013094, 1.07253735, 0.94637502, 1.10087012,
                 1.26960524, 1.06258364, 1.189019,   1.06217292, 1.00595144, 0.85706115,
                 1.03923299, 0.90867526, 0.8936431,  0.85486129, 0.8527829,  0.5       ]),
-        ])
+        dict(
+            type='RenderLoss',
+        )
+        ],)
 
 loss_input_convertion = dict(
     pred_occ="pred_occ",
     gaussian="gaussian",
     sampled_xyz="sampled_xyz",
     sampled_label="sampled_label",
-    occ_mask="occ_mask"
+    occ_mask="occ_mask",
+    render_imgs="render_imgs",
+    imgs="imgs"
 )
 # ========= model config ===============
 embed_dims = 128
@@ -188,6 +163,9 @@ model = dict(
             unit_xyz=[4.0, 4.0, 1.0],
             K=27,
         ),
+        gaussian_photo=dict(
+            type='GaussianPhoto',
+        ),
         spconv_layer=dict(
             _delete_=True,
             type="SparseConv3D",
@@ -214,7 +192,15 @@ model = dict(
             "norm",
             "refine",
             "densify",
-        ],
+            "photo",
+        ] * 2 + [
+            "spconv",
+            "norm",
+            "deformable",
+            "ffn",
+            "norm",
+            "refine",
+        ]
     ),
     head=dict(
         type='GaussianHead',

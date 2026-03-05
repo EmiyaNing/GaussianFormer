@@ -28,6 +28,8 @@ class NuScenesDataset(Dataset):
             'img',
             'projection_mat',
             'image_wh',
+            'intrinsic',
+            'mask_img',
             'occ_label',
             'occ_xyz',
             'occ_cam_mask',
@@ -126,6 +128,7 @@ class NuScenesDataset(Dataset):
         ego2image_rts = []
         cam_positions = []
         focal_positions = []
+        cam_intrinsic = []
 
         lidar2ego_r = Quaternion(info['data']['LIDAR_TOP']['calib']['rotation']).rotation_matrix
         lidar2ego = np.eye(4)
@@ -165,6 +168,7 @@ class NuScenesDataset(Dataset):
             intrinsic = info['data'][cam_type]['calib']['camera_intrinsic']
             viewpad = np.eye(4)
             viewpad[:3, :3] = intrinsic
+            cam_intrinsic.append(viewpad[:3, :3])
             cam_position = img2lidar @ viewpad @ np.array([0., 0., 0., 1.]).reshape([4, 1])
             cam_positions.append(cam_position.flatten()[:3])
             focal_position = img2lidar @ viewpad @ np.array([0., 0., f, 1.]).reshape([4, 1])
@@ -178,6 +182,7 @@ class NuScenesDataset(Dataset):
             timestamp=info["timestamp"] / 1e6,
             img_filename=image_paths,
             pts_filename=os.path.join(self.data_path, info['data']['LIDAR_TOP']['filename']),
+            intrinsic=np.asarray(cam_intrinsic),
             ego2lidar=ego2lidar,
             lidar2img=np.asarray(lidar2img_rts),
             ego2img=np.asarray(ego2image_rts),

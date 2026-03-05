@@ -50,7 +50,8 @@ class BEVSegmentor(CustomBaseSegmentor):
         img_feats = []
         for idx in self.img_backbone_out_indices:
             img_feats.append(img_feats_backbone[idx])
-        img_feats = self.img_neck(img_feats)
+        if self.img_neck is not None:
+            img_feats = self.img_neck(img_feats)
         if isinstance(img_feats, dict):
             secondfpn_out = img_feats["secondfpn_out"][0]
             BN, C, H, W = secondfpn_out.shape

@@ -1,3 +1,5 @@
+from typing import Any, Dict
+
 import os
 import torch
 import numpy as np
@@ -49,6 +51,25 @@ class DefaultFormatBundle(object):
             else:
                 imgs = np.ascontiguousarray(results['img'].transpose(2, 0, 1))
             results['img'] = torch.from_numpy(imgs)
+        # 处理 mask_img
+        if 'mask_img' in results:
+            mask_imgs = results['mask_img']
+            if isinstance(mask_imgs, list):
+                # 确保每个掩码为三维 (H, W, 1)
+                masks = []
+                for mask in mask_imgs:
+                    if mask.ndim == 2:
+                        mask = mask[:, :, np.newaxis]
+                    # 转置为 (1, H, W) 或 (C, H, W)
+                    mask = mask.transpose(2, 0, 1)
+                    masks.append(mask)
+                masks = np.ascontiguousarray(np.stack(masks, axis=0))
+            else:
+                # 单个掩码
+                if mask_imgs.ndim == 2:
+                    mask_imgs = mask_imgs[:, :, np.newaxis]
+                masks = np.ascontiguousarray(mask_imgs.transpose(2, 0, 1))
+            results['mask_img'] = torch.from_numpy(masks)
         return results
 
     def __repr__(self):
@@ -81,6 +102,15 @@ class ResizeCropFlipImage(object):
         imgs = results["img"]
         N = len(imgs)
         new_imgs = []
+        # 处理mask_img（如果存在）
+        if 'mask_img' in results:
+            mask_imgs = results['mask_img']
+            assert len(mask_imgs) == N, "mask_img长度与img不一致"
+            new_mask_imgs = []
+        else:
+            mask_imgs = None
+            new_mask_imgs = None
+        
         for i in range(N):
             img = Image.fromarray(np.uint8(imgs[i]))
             img, ida_mat = self._img_transform(
@@ -90,15 +120,36 @@ class ResizeCropFlipImage(object):
                 crop=crop,
                 flip=flip,
                 rotate=rotate,
+                is_mask=False,
             )
             mat = np.eye(4)
             mat[:3, :3] = ida_mat
             new_imgs.append(np.array(img).astype(np.float32))
             results["lidar2img"][i] = mat @ results["lidar2img"][i]
             results["ego2img"][i] = mat @ results["ego2img"][i]
+            
+            # 处理mask_img
+            if mask_imgs is not None:
+                mask_arr = mask_imgs[i]
+                # 如果掩码是三维单通道，压缩为二维
+                if mask_arr.ndim == 3 and mask_arr.shape[2] == 1:
+                    mask_arr = mask_arr.squeeze(axis=2)
+                mask_img = Image.fromarray(np.uint8(mask_arr))
+                mask_img, _ = self._img_transform(
+                    mask_img,
+                    resize=resize,
+                    resize_dims=resize_dims,
+                    crop=crop,
+                    flip=flip,
+                    rotate=rotate,
+                    is_mask=True,
+                )
+                new_mask_imgs.append(np.array(mask_img))
 
         results["img"] = new_imgs
         results["img_shape"] = [x.shape[:2] for x in new_imgs]
+        if new_mask_imgs is not None:
+            results['mask_img'] = new_mask_imgs
         return results
 
     def _get_rot(self, h):
@@ -109,15 +160,23 @@ class ResizeCropFlipImage(object):
             ]
         )
 
-    def _img_transform(self, img, resize, resize_dims, crop, flip, rotate):
+    def _img_transform(self, img, resize, resize_dims, crop, flip, rotate, is_mask=False):
         ida_rot = torch.eye(2)
         ida_tran = torch.zeros(2)
         # adjust image
-        img = img.resize(resize_dims)
-        img = img.crop(crop)
-        if flip:
-            img = img.transpose(method=Image.FLIP_LEFT_RIGHT)
-        img = img.rotate(rotate)
+        if is_mask:
+            # 对于mask使用最近邻插值
+            img = img.resize(resize_dims, resample=Image.NEAREST)
+            img = img.crop(crop)
+            if flip:
+                img = img.transpose(method=Image.FLIP_LEFT_RIGHT)
+            img = img.rotate(rotate, resample=Image.NEAREST)
+        else:
+            img = img.resize(resize_dims)
+            img = img.crop(crop)
+            if flip:
+                img = img.transpose(method=Image.FLIP_LEFT_RIGHT)
+            img = img.rotate(rotate)
 
         # post-homography transformation
         ida_rot *= resize
@@ -166,6 +225,10 @@ class NormalizeMultiviewImage(object):
             mmcv.imnormalize(img, self.mean, self.std, self.to_rgb)
             for img in results["img"]
         ]
+        if 'mask_img' in results.keys():
+            results['mask_img'] = [
+                mask / 255.0 for mask in results['mask_img']
+            ]
         results["img_norm_cfg"] = dict(
             mean=self.mean, std=self.std, to_rgb=self.to_rgb
         )
@@ -176,6 +239,164 @@ class NormalizeMultiviewImage(object):
         repr_str += f"(mean={self.mean}, std={self.std}, to_rgb={self.to_rgb})"
         return repr_str
 
+@OPENOCC_TRANSFORMS.register_module()
+class GlobalRotScaleTrans:
+    def __init__(self, resize_lim, rot_lim, trans_lim, is_train):
+        self.resize_lim = resize_lim
+        self.rot_lim = rot_lim
+        self.trans_lim = trans_lim
+        self.is_train = is_train
+
+    def __call__(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        transform = np.eye(4).astype(np.float32)
+
+        if self.is_train:
+            scale = random.uniform(*self.resize_lim)
+            theta = random.uniform(*self.rot_lim)
+            translation = np.array([random.normal(0, self.trans_lim) for i in range(3)])
+            rotation = np.eye(3)
+
+            if "lidar_points" in data:
+                data["lidar_points"].rotate(-theta)
+                data["lidar_points"].translate(translation)
+                data["lidar_points"].scale(scale)
+
+            gt_boxes = data["gt_bboxes_3d"]
+            rotation = rotation @ gt_boxes.rotate(theta).numpy()
+            gt_boxes.translate(translation)
+            gt_boxes.scale(scale)
+            data["gt_bboxes_3d"] = gt_boxes
+
+            transform[:3, :3] = rotation.T * scale
+            transform[:3, 3] = translation * scale
+
+        data["lidar_aug_matrix"] = transform
+        return data
+
+@OPENOCC_TRANSFORMS.register_module()
+class GridMask:
+    def __init__(
+        self,
+        use_h,
+        use_w,
+        max_epoch,
+        rotate=1,
+        offset=False,
+        ratio=0.5,
+        mode=0,
+        prob=1.0,
+        fixed_prob=False,
+    ):
+        self.use_h = use_h
+        self.use_w = use_w
+        self.rotate = rotate
+        self.offset = offset
+        self.ratio = ratio
+        self.mode = mode
+        self.st_prob = prob
+        self.prob = prob
+        self.epoch = None
+        self.max_epoch = max_epoch
+        self.fixed_prob = fixed_prob
+
+    def set_epoch(self, epoch):
+        self.epoch = epoch
+        if not self.fixed_prob:
+            self.set_prob(self.epoch, self.max_epoch)
+
+    def set_prob(self, epoch, max_epoch):
+        self.prob = self.st_prob * self.epoch / self.max_epoch
+
+    def __call__(self, results):
+        if np.random.rand() >= self.prob:
+            return results
+        imgs = results["img"]
+        h = imgs[0].shape[0]
+        w = imgs[0].shape[1]
+        self.d1 = 2
+        self.d2 = min(h, w)
+        hh = int(1.5 * h)
+        ww = int(1.5 * w)
+        d = np.random.randint(self.d1, self.d2)
+        if self.ratio == 1:
+            self.l = np.random.randint(1, d)
+        else:
+            self.l = min(max(int(d * self.ratio + 0.5), 1), d - 1)
+        mask = np.ones((hh, ww), np.float32)
+        st_h = np.random.randint(d)
+        st_w = np.random.randint(d)
+        if self.use_h:
+            for i in range(hh // d):
+                s = d * i + st_h
+                t = min(s + self.l, hh)
+                mask[s:t, :] *= 0
+        if self.use_w:
+            for i in range(ww // d):
+                s = d * i + st_w
+                t = min(s + self.l, ww)
+                mask[:, s:t] *= 0
+
+        r = np.random.randint(self.rotate)
+        mask = Image.fromarray(np.uint8(mask))
+        mask = mask.rotate(r)
+        mask = np.asarray(mask)
+        mask = mask[
+            (hh - h) // 2 : (hh - h) // 2 + h, (ww - w) // 2 : (ww - w) // 2 + w
+        ]
+
+        mask = mask.astype(np.float32)
+        mask = mask[:, :, None]
+        if self.mode == 1:
+            mask = 1 - mask
+
+        # mask = mask.expand_as(imgs[0])
+        if self.offset:
+            offset = torch.from_numpy(2 * (np.random.rand(h, w) - 0.5)).float()
+            offset = (1 - mask) * offset
+            imgs = [x * mask + offset for x in imgs]
+        else:
+            imgs = [x * mask for x in imgs]
+
+        results.update(img=imgs)
+        return results
+
+@OPENOCC_TRANSFORMS.register_module()
+class RandomFlip3D:
+    def __call__(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        flip_horizontal = random.choice([0, 1])
+        flip_vertical = random.choice([0, 1])
+
+        rotation = np.eye(3)
+        if flip_horizontal:
+            rotation = np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]]) @ rotation
+            data["occ_aug_matrix"][:3, :3] = np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]]) @ data["occ_aug_matrix"][:3, :3]
+            if "lidar_points" in data:
+                data["lidar_points"].flip("horizontal")
+            if "gt_bboxes_3d" in data:
+                data["gt_bboxes_3d"].flip("horizontal")
+            if "gt_masks_bev" in data:
+                data["gt_masks_bev"] = data["gt_masks_bev"][:, :, ::-1].copy()
+            if "voxel_semantics" in data:
+                data['voxel_semantics'] = data['voxel_semantics'][:, ::-1, :].copy()
+                data['mask_lidar'] = data['mask_lidar'][:, ::-1, :].copy()
+                data['mask_camera'] = data['mask_camera'][:, ::-1, :].copy()
+
+        if flip_vertical:
+            rotation = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]]) @ rotation
+            data["occ_aug_matrix"][:3, :3] = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 1]]) @ data["occ_aug_matrix"][:3, :3]
+            if "lidar_points" in data:
+                data["lidar_points"].flip("vertical")
+            if "gt_bboxes_3d" in data:
+                data["gt_bboxes_3d"].flip("vertical")
+            if "gt_masks_bev" in data:
+                data["gt_masks_bev"] = data["gt_masks_bev"][:, ::-1, :].copy()
+            if "voxel_semantics" in data:
+                data['voxel_semantics'] = data['voxel_semantics'][::-1, :, :].copy()
+                data['mask_lidar'] = data['mask_lidar'][::-1, :, :].copy()
+                data['mask_camera'] = data['mask_camera'][::-1, :, :].copy()
+
+        data["lidar_aug_matrix"][:3, :] = rotation @ data["lidar_aug_matrix"][:3, :]
+        return data
 
 @OPENOCC_TRANSFORMS.register_module()
 class PhotoMetricDistortionMultiViewImage:
@@ -297,10 +518,11 @@ class LoadMultiViewImageFromFiles(object):
             Defaults to 'unchanged'.
     """
 
-    def __init__(self, to_float32=False, color_type='unchanged', crop_size=None):
+    def __init__(self, to_float32=False, color_type='unchanged', crop_size=None, load_mask=True):
         self.to_float32 = to_float32
         self.color_type = color_type
         self.crop_size = crop_size
+        self.load_mask = load_mask
 
     def __call__(self, results):
         """Call function to load multi-view image from files.
@@ -328,6 +550,22 @@ class LoadMultiViewImageFromFiles(object):
             img = img[:self.crop_size[0], :self.crop_size[1]]
         if self.to_float32:
             img = img.astype(np.float32)
+        if self.load_mask:
+            maskfilename = []
+            for name in filename:
+                name_list = name.split('samples')
+                root_path, img_name = name_list[0], name_list[-1]
+                img_name = img_name.replace('.jpg', '.png')
+                maskfilename.append(root_path + 'samples/MASK' + img_name)
+
+            maskfile = np.stack(
+                [mmcv.imread(maskname, 'grayscale') for maskname in maskfilename], axis=-1
+            )
+            maskfile = maskfile[:, :, None, :]
+            if self.crop_size is not None:
+                maskfile = maskfile[:self.crop_size[0], :self.crop_size[1]]
+                maskfile = maskfile 
+            results['mask_img'] = [maskfile[..., i] for i in range(maskfile.shape[-1])]
         results['filename'] = filename
         # unravel to list, see `DefaultFormatBundle` in formatting.py
         # which will transpose each image separately and then stack into array
