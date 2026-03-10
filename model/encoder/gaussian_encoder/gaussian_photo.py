@@ -42,7 +42,7 @@ class GaussianPhoto(BaseModule):
         projection_mat = metas['projection_mat']
         image_wh  = metas['image_wh']
 
-        background_color = torch.tensor([-2.1179, -2.0357, -1.8044], dtype=torch.float32, device=means.device)
+        background_color = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32, device=means.device)
 
         points_2d = torch.matmul(
             projection_mat[:, :, None], pts_extend[:, None, ..., None]
@@ -56,26 +56,25 @@ class GaussianPhoto(BaseModule):
                                 (points_2d[..., 1] > 0) & (points_2d[..., 1] < 1)
 
         # current imgs with shape B, N, 3, H, W
-        valid_imgs = img * mask_img
-        bg_colors  = torch.ones_like(valid_imgs).permute(0, 1, 3, 4, 2) * background_color
-        bg_colors  = bg_colors.permute(0, 1, 4, 2, 3)
-        valid_imgs = valid_imgs + bg_colors * (~mask_img.bool()).float()
+        img = img.permute(0, 1, 3, 4, 2)
+        img = img * rgb_stds + rgb_means
+        img = img.clamp(0, 255)
+        img = img.permute(0, 1, 4, 2, 3)
+        valid_imgs = img.float() * mask_img
         
         B, N, C, H, W = valid_imgs.shape
         valid_imgs = valid_imgs.reshape(B * N, C, H, W)
         points_2d  = points_2d.reshape(B * N, num_pts, 2)
         mask = mask.reshape(B * N, -1)
 
-        # 使用gaussian的中心点在2d平面的注射点projects_2d来从对应的valid_imgs中获取对应合法的rgb value作为gaussian的colors值
-        # 根据gaussian的colors以及quats, scales, opacities, means使用gsplat.rasterization函数将gaussian映射为6视角的图像
-        # 映射得到的6视角图像需要作为返回值。
 
-        # 颜色采样
+        # sample color from valid_imgs
         grid = points_2d * 2 - 1  # 转换到 [-1, 1] 范围，适应 grid_sample
         grid = grid.unsqueeze(1)  # (B*N, 1, num_pts, 2)
         colors = F.grid_sample(valid_imgs.float(), grid, align_corners=False)  # (B*N, C, 1, num_pts)
         colors = colors.squeeze(2).permute(0, 2, 1)  # (B*N, num_pts, C)
-
+        # normalize the colors from [0, 255] to [0, 1]
+        colors = colors / 255.0
 
         # 重塑为 (B, N, num_pts, C)
         colors = colors.reshape(B, N, num_pts, C)
@@ -83,7 +82,7 @@ class GaussianPhoto(BaseModule):
         
         # 从 metas 中获取渲染所需的相机参数
         # 使用 projection_mat 作为 lidar2cam，intrinsic 作为 camera_intrinsic
-        lidar2cam = metas['projection_mat']  # (B, N, 4, 4)
+        lidar2cam = metas['lidar2cam']  # (B, N, 4, 4)
         camera_intrinsic = metas['intrinsic']  # (B, N, 3, 3)
         # 图像尺寸
         W = image_wh[..., 0].int()

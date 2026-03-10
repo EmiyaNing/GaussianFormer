@@ -10,3 +10,5 @@ from .voxel_query_module import VoxelQueryModule
 from .topk_module.topk_semantic_densify import SemanticDensify
 from .topk_module.topk_densify_v2 import DensifyOnly
 from .gaussian_photo import GaussianPhoto
+from .geometric_renfine_only import GaussianGeometricRefine
+from .semantic_renfine_only import GaussianSemanticRefine

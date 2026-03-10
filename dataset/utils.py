@@ -43,7 +43,8 @@ def get_img2global(calib_dict, pose_dict):
     ego2global[:3, 3] = np.asarray(pose_dict['translation']).T
 
     img2global = ego2global @ cam2ego @ img2cam
-    return img2global
+    cam2global = ego2global @ cam2ego
+    return img2global, cam2global
 
 def get_lidar2global(calib_dict, pose_dict):
 

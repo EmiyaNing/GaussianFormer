@@ -15,6 +15,8 @@ class GaussianOccEncoder(BaseEncoder):
         ffn: dict,
         deformable_model: dict,
         refine_layer: dict,
+        sem_optimize: dict = None,
+        geo_optimize: dict = None,
         mid_refine_layer: dict = None,
         densify_layer: dict = None,
         spconv_layer: dict = None,
@@ -52,6 +54,8 @@ class GaussianOccEncoder(BaseEncoder):
             "ffn": [ffn, MODELS],
             "deformable": [deformable_model, MODELS],
             "refine": [refine_layer, MODELS],
+            "sem_optimize": [sem_optimize, MODELS],
+            "geo_optimize": [geo_optimize, MODELS],
             "densify" : [densify_layer, MODELS],
             "mid_refine":[mid_refine_layer, MODELS],
             "spconv": [spconv_layer, MODELS],
@@ -125,6 +129,20 @@ class GaussianOccEncoder(BaseEncoder):
                 prediction.append({'gaussian': gaussian})
                 if i != len(self.operation_order) - 1:
                     anchor_embed = self.anchor_encoder(anchor)
+            elif "geo_optimize" in op:
+                anchor, gaussian = self.layers[i](
+                    instance_feature,
+                    anchor,
+                    gaussian
+                )
+                prediction.append({'gaussian': gaussian})
+            elif "sem_optimize" in op:
+                anchor, gaussian = self.layers[i](
+                    instance_feature,
+                    anchor,
+                    gaussian
+                )
+                prediction.append({'gaussian': gaussian})
             elif "densify" in op:
                 anchor, gaussian, instance_feature = self.layers[i](
                     instance_feature,
