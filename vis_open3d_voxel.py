@@ -134,12 +134,6 @@ def create_voxel_grid_from_occupancy(occ_data, voxel_size, vox_origin, sem=False
     
     print(f"[create_voxel_grid] 有效体素数量: {len(fov_voxels)}")
     
-    # 如果体素数量过多，进行采样
-    if len(fov_voxels) > max_voxels:
-        print(f"⚠ 体素数量过多 ({len(fov_voxels)})，进行采样到 {max_voxels}")
-        indices = np.random.choice(len(fov_voxels), max_voxels, replace=False)
-        fov_voxels = fov_voxels[indices]
-    
     # 直接创建点云进行可视化，不再创建网格
     points = fov_voxels[:, :3]
     
@@ -176,12 +170,7 @@ def save_occ(save_dir, occ_data, name, sem=False, cap=2, dataset='nusc', show_wi
     """使用Open3D体素网格的3D占用可视化 - 优化内存版本"""
     print(f"[save_occ] {name}")
     
-    try:
-        import open3d as o3d
-        print("✓ Open3D导入成功")
-    except Exception as e:
-        print(f"✗ 无法导入Open3D: {e}")
-        return
+    import open3d as o3d
 
     if dataset == 'nusc':
         voxel_size = [0.5] * 3
@@ -219,7 +208,6 @@ def save_occ(save_dir, occ_data, name, sem=False, cap=2, dataset='nusc', show_wi
         
         # 清理批次内存
         clear_memory()
-        print(f"[save_occ] 已添加 {geometries_added}/{len(voxel_geometries)} 个几何体")
     
     # 设置渲染选项
     render_option = vis.get_render_option()
@@ -247,10 +235,6 @@ def save_occ(save_dir, occ_data, name, sem=False, cap=2, dataset='nusc', show_wi
     
     # 如果显示窗口，则保持打开状态
     if show_window:
-        print("🖱️  交互式3D体素窗口已打开，可以:")
-        print("   - 鼠标拖拽旋转视角")
-        print("   - 滚轮缩放")
-        print("   - 按 'Q' 或关闭窗口继续")
         vis.run()  # 这会阻塞直到窗口关闭
     
     vis.destroy_window()
@@ -259,7 +243,6 @@ def save_occ(save_dir, occ_data, name, sem=False, cap=2, dataset='nusc', show_wi
     del voxel_geometries
     clear_memory()
     
-    print(f"[save_occ] 完成 {name}")
 
 def create_ellipsoid(center, radii, rotation, color, opacity=1.0, resolution=4):
     """创建椭球体网格 - 优化内存版本"""
@@ -497,11 +480,6 @@ def save_gaussian_point(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=Fa
     sem_cmap = get_nuscenes_colormap()
 
     # 保存高斯属性（可选）- 只在需要时保存
-    try:
-        if len(gaussian_data.means) > 0 and len(gaussian_data.means[0]) > 0:
-            torch.save(gaussian_data, os.path.join(save_dir, f'{name}_attr.pth'))
-    except:
-        print("⚠ 无法保存高斯属性文件")
 
     # 提取高斯参数 - 优化内存使用
     if len(gaussian_data.means) > 0:
@@ -526,48 +504,7 @@ def save_gaussian_point(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=Fa
     else:
         pred = np.ones(len(means)) if len(means) > 0 else np.array([])
 
-    # 过滤条件
-    if ignore_opa:
-        opas[:] = 1.
-        mask = (pred != empty_label)
-    else:
-        mask = (pred != empty_label) & (opas > 0.1)
 
-    if filter_zsize:
-        if len(means) > 0:
-            zdist, zbins = np.histogram(means[:, 2], bins=min(100, len(means)))
-            zidx = np.argsort(zdist)[::-1]
-            for idx in zidx[:10]:
-                binl = zbins[idx]
-                binr = zbins[idx + 1]
-                zmsk = (means[:, 2] < binl) | (means[:, 2] > binr)
-                mask = mask & zmsk
-            
-            z_small_mask = scales[:, 2] > 0.1
-            mask = z_small_mask & mask
-
-    if len(means) > 0:
-        means = means[mask]
-        scales = scales[mask]
-        rotations = rotations[mask]
-        opas = opas[mask]
-        pred = pred[mask]
-
-    print(f"[save_gaussian_point] 有效高斯点数量: {len(means)}")
-
-    if len(means) == 0:
-        print("⚠ 没有有效的高斯点可可视化")
-        return
-
-    # 如果高斯点数量过多，进行采样
-    if len(means) > max_gaussians:
-        print(f"⚠ 高斯点数量过多 ({len(means)})，进行采样到 {max_gaussians}")
-        indices = np.random.choice(len(means), max_gaussians, replace=False)
-        means = means[indices]
-        scales = scales[indices]
-        rotations = rotations[indices]
-        opas = opas[indices]
-        pred = pred[indices]
 
     # 生成单位球面上的27个点
     sphere_points = generate_sphere_points(resolution=3)
@@ -630,13 +567,6 @@ def save_gaussian_point(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=Fa
     
     print(f"[save_gaussian_point] 总共生成了 {len(all_points)} 个形状点")
 
-    # 如果点数量过多，进行采样
-    if len(all_points) > max_gaussians * 27:
-        max_total_points = max_gaussians * 27
-        print(f"⚠ 形状点数量过多 ({len(all_points)})，进行采样到 {max_total_points}")
-        indices = np.random.choice(len(all_points), max_total_points, replace=False)
-        all_points = all_points[indices]
-        all_colors = all_colors[indices]
 
     # 创建点云
     pcd = o3d.geometry.PointCloud()

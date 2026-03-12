@@ -253,6 +253,17 @@ def main(local_rank, args):
                             f'val_{i_iter_val}_gaussian',
                             **draw_gaussian_params
                         )
+                if args.vis_render_imgs:
+                    render_list = result_dict['render_imgs']
+                    print("start to render the imgs")
+                    import cv2
+                    for stage_idx, renders in enumerate(render_list):
+                        renders = renders[0].permute(0, 2, 3, 1)
+                        for idx, cur_view in enumerate(renders):
+                            cur_view = (cur_view * 255).detach().cpu().numpy().astype(np.uint8)
+                            name = os.path.join(save_dir, 'stage-' + str(stage_idx) + 'render-'+str(idx) + '.png')
+                            print("current display the image with idx: ", idx)
+                            cv2.imwrite(name, cur_view) 
                 miou_metric._after_step(pred_occ, gt_occ)
             
             if i_iter_val % print_freq == 0 and local_rank == 0:
@@ -286,6 +297,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='nusc')
     parser.add_argument('--model-type', type=str, default="base", choices=["base", "prob"])
     parser.add_argument('--vis-gaussian-gt', action='store_true', default=False)
+    parser.add_argument('--vis-render-imgs', action='store_true', default=False)
     args = parser.parse_args()
     
     ngpus = torch.cuda.device_count()

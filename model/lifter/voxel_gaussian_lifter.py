@@ -200,17 +200,17 @@ class GaussianVoxelLearnear(BaseLifter):
             voxel_ctrs, voxel_feat, spatial_shape, batch_size
         )
 
-        #multi_voxel = voxel_dict['multi_scale_3d_features']
-        #stride_2 = multi_voxel['x_conv2']
-        #anchor_stride2, feature_stride2, bs_mask2 = self.decode_only_ctr_features(stride_2.indices, stride_2.features, stride_2.spatial_shape, batch_size)
+        multi_voxel = voxel_dict['multi_scale_3d_features']
+        stride_2 = multi_voxel['x_conv2']
+        anchor_stride2, feature_stride2, bs_mask2 = self.decode_only_ctr_features(stride_2.indices, stride_2.features, stride_2.spatial_shape, batch_size)
 
-        #stride_4 = multi_voxel['x_conv3']
-        #anchor_stride4, feature_stride4, bs_mask4 = self.decode_only_ctr_features(stride_4.indices, stride_4.features, stride_4.spatial_shape, batch_size)
+        stride_4 = multi_voxel['x_conv3']
+        anchor_stride4, feature_stride4, bs_mask4 = self.decode_only_ctr_features(stride_4.indices, stride_4.features, stride_4.spatial_shape, batch_size)
 
-        #stride_8 = multi_voxel['x_conv4']
-        #anchor_stride8, feature_stride8, bs_mask8 = self.decode_only_ctr_features(stride_8.indices, stride_8.features, stride_8.spatial_shape, batch_size)
+        stride_8 = multi_voxel['x_conv4']
+        anchor_stride8, feature_stride8, bs_mask8 = self.decode_only_ctr_features(stride_8.indices, stride_8.features, stride_8.spatial_shape, batch_size)
 
-        '''multi_stride_features = dict(
+        multi_stride_features = dict(
             stride2 = dict(
                 center=anchor_stride2,
                 feature=feature_stride2,
@@ -226,7 +226,7 @@ class GaussianVoxelLearnear(BaseLifter):
                 feature=feature_stride8,
                 bs_mask=bs_mask8
             )
-        )'''
+        )
 
         # 堆叠成batch
         anchor = torch.stack(anchors_list)
@@ -238,5 +238,5 @@ class GaussianVoxelLearnear(BaseLifter):
             'rep_features': instance_feature,
             'representation': anchor,
             'anchor_init': anchor.clone(),
-            #'multi_stride_features': multi_stride_features
+            'multi_stride_features': multi_stride_features
         }

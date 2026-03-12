@@ -193,6 +193,8 @@ def render_one_frame(frame, occ_data_root, output_dir, fixed_scale=0.1, rgb_root
         # 选取当前相机的视图矩阵和内参
         viewmat = viewmats[cam_idx].unsqueeze(0)  # (1,4,4)
         K = Ks[cam_idx].unsqueeze(0)  # (1,3,3)
+        import pdb
+        pdb.set_trace()
         render, _, _ = gsplat.rasterization(
             means, quats, scales, opacities, colors, viewmat, K, W, H, backgrounds=bg_color
         )
@@ -227,7 +229,7 @@ def main():
                         help='相机参数pkl文件路径')
     parser.add_argument('--occ_data_root', default='./data/surroundocc/samples',
                         help='surroundocc数据目录，包含.npy文件')
-    parser.add_argument('--output_root', default='./rendered_gt',
+    parser.add_argument('--output_root', default='./rendered',
                         help='输出图像目录')
     parser.add_argument('--fixed_scale', type=float, default=0.3,
                         help='高斯球的固定尺度（米）')

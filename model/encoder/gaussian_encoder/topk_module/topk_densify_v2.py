@@ -136,9 +136,9 @@ class DensifyOnly(BaseModule):
             opa_shift   = safe_sigmoid(opa_shift_out)
 
             cur_new_means = filter_means + means_shift * filter_scales
-            cur_new_means_x = torch.clamp(cur_new_means[:, 0], self.pc_range[0], self.pc_range[3])
-            cur_new_means_y = torch.clamp(cur_new_means[:, 1], self.pc_range[1], self.pc_range[4])
-            cur_new_means_z = torch.clamp(cur_new_means[:, 2], self.pc_range[2], self.pc_range[5])
+            cur_new_means_x = torch.clamp(cur_new_means[:, 0], self.pc_range[0]+1e-6, self.pc_range[3]-1e-6)
+            cur_new_means_y = torch.clamp(cur_new_means[:, 1], self.pc_range[1]+1e-6, self.pc_range[4]-1e-6)
+            cur_new_means_z = torch.clamp(cur_new_means[:, 2], self.pc_range[2]+1e-6, self.pc_range[5]-1e-6)
             cur_new_means = torch.stack([cur_new_means_x, cur_new_means_y, cur_new_means_z], dim=-1)
             cur_new_xyz_output = safe_sigmoid(cur_new_means)
 

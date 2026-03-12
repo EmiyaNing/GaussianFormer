@@ -88,8 +88,8 @@ class GaussianPhoto(BaseModule):
         W = image_wh[..., 0].int()
         H = image_wh[..., 1].int()
         # 使用第一个批次和第一个视图的尺寸作为渲染尺寸（假设所有视图尺寸相同）
-        render_height = H[0, 0].item()
-        render_width = W[0, 0].item()
+        render_height = H[0, 0].item() // 4
+        render_width = W[0, 0].item() // 4
         
         # 准备渲染输出列表
         rendered_list = []

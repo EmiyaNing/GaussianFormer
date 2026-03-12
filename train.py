@@ -230,8 +230,11 @@ def main(local_rank, args):
                     'global_iter': global_iter
                 }
                 for loss_input_key, loss_input_val in cfg.loss_input_convertion.items():
-                    loss_input.update({
-                        loss_input_key: result_dict[loss_input_val]})
+                    if (loss_input_key =='mask_img') and (loss_input_key in data.keys()):
+                        loss_input[loss_input_key] = data[loss_input_key]
+                    else:
+                        loss_input.update({
+                            loss_input_key: result_dict[loss_input_val]})
                 loss, loss_dict = loss_func(loss_input)
                 loss = loss / grad_accumulation
             if not amp:
@@ -325,8 +328,11 @@ def main(local_rank, args):
                         'global_iter': global_iter
                     }
                     for loss_input_key, loss_input_val in cfg.loss_input_convertion.items():
-                        loss_input.update({
-                            loss_input_key: result_dict[loss_input_val]})
+                        if (loss_input_key =='mask_img') and (loss_input_key in data.keys()):
+                            loss_input[loss_input_key] = data[loss_input_key]
+                        else:
+                            loss_input.update({
+                                loss_input_key: result_dict[loss_input_val]})
                     loss, loss_dict = loss_func(loss_input)
                 
                 if 'final_occ' in result_dict:
