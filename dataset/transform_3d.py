@@ -240,6 +240,27 @@ class NormalizeMultiviewImage(object):
         return repr_str
 
 @OPENOCC_TRANSFORMS.register_module()
+class MaskedMultiviewImage(object):
+    """Normalize the image.
+    Added key is "img_norm_cfg".
+    Args:
+        mean (sequence): Mean values of 3 channels.
+        std (sequence): Std values of 3 channels.
+        to_rgb (bool): Whether to convert the image from BGR to RGB,
+            default is true.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, results):
+        results['img'] = [
+            img * mask for img, mask in zip(results['img'], results['mask_img'])
+        ]
+        return results
+
+
+@OPENOCC_TRANSFORMS.register_module()
 class GlobalRotScaleTrans:
     def __init__(self, resize_lim, rot_lim, trans_lim, is_train):
         self.resize_lim = resize_lim
