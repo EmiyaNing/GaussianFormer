@@ -12,3 +12,5 @@ from .topk_module.topk_densify_v2 import DensifyOnly
 from .gaussian_photo import GaussianPhoto
 from .geometric_renfine_only import GaussianGeometricRefine
 from .semantic_renfine_only import GaussianSemanticRefine
+from .paint_gaussian import GaussianPainter
+from .photo2render import Photo2Render

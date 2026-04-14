@@ -47,6 +47,7 @@ class OneCycleLR:
         if not isinstance(optimizer, Optimizer):
             raise TypeError('{} is not an Optimizer'.format(type(optimizer).__name__))
         self.optimizer = optimizer
+        self.param_group_length = len(optimizer.param_groups)
 
         self.num_steps = num_steps
 
@@ -112,9 +113,10 @@ class OneCycleLR:
             # Exceeded given num_steps: do nothing
             return
 
-        self.optimizer.param_groups[0]['lr'] = lr
-        if momentum:
-            self.optimizer.param_groups[0]['momentum'] = momentum
+        for i in range(self.param_group_length):
+            self.optimizer.param_groups[i]['lr'] = lr
+            if momentum:
+                self.optimizer.param_groups[i]['momentum'] = momentum
 
     def step_update(self, current_step):
         """Conducts one step of learning rate and momentum update
@@ -140,6 +142,7 @@ class OneCycleLR:
             # Exceeded given num_steps: do nothing
             return
 
-        self.optimizer.param_groups[0]['lr'] = lr
-        if momentum:
-            self.optimizer.param_groups[0]['momentum'] = momentum
+        for i in range(self.param_group_length):
+            self.optimizer.param_groups[i]['lr'] = lr
+            if momentum:
+                self.optimizer.param_groups[i]['momentum'] = momentum

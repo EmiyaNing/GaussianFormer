@@ -258,7 +258,8 @@ def main(local_rank, args):
 
             global_iter += 1
             if i_iter % print_freq == 0 and local_rank == 0:
-                lr = max([p['lr'] for p in optimizer.param_groups])
+                #lr = max([p['lr'] for p in optimizer.param_groups])
+                lr = optimizer.param_groups[0]['lr']
                 # lr = optimizer.param_groups[0]['lr']
                 logger.info('[TRAIN] Epoch %d Iter %5d/%d: Loss: %.3f (%.3f), grad_norm: %.3f, lr: %.7f, time: %.3f (%.3f)'%(
                     epoch, i_iter, len(train_dataset_loader), 

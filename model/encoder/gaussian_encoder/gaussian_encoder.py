@@ -15,13 +15,15 @@ class GaussianOccEncoder(BaseEncoder):
         ffn: dict,
         deformable_model: dict,
         refine_layer: dict,
-        sem_optimize: dict = None,
-        geo_optimize: dict = None,
+        sem_optimize: dict = None, # experiment module for decompose the refine module
+        geo_optimize: dict = None, # experiment module for decompose the refine module
         mid_refine_layer: dict = None,
         densify_layer: dict = None,
         spconv_layer: dict = None,
         voxel_query_layer: dict = None,
-        gaussian_photo: dict = None,
+        gaussian_photo: dict = None, # experiment module for photo supervision, color value get dynamically from input images
+        gaussian_paint: dict = None, # experiment module for photo supervision, color value get only once.
+        photo2render: dict = None, # experiment module for photo supervision, render the gaussian into image plane and calculate photometric loss.
         num_decoder: int = 6,
         operation_order: Optional[List[str]] = None,
         init_cfg=None,
@@ -61,6 +63,8 @@ class GaussianOccEncoder(BaseEncoder):
             "spconv": [spconv_layer, MODELS],
             "query": [voxel_query_layer, MODELS],
             "photo": [gaussian_photo, MODELS],
+            "paint": [gaussian_paint, MODELS],
+            "render": [photo2render, MODELS],
         }
         self.layers = nn.ModuleList(
             [
@@ -163,6 +167,20 @@ class GaussianOccEncoder(BaseEncoder):
                 rendered_img = self.layers[i](
                     kwargs['imgs'],
                     metas['mask_img'],
+                    gaussian,
+                    metas
+                )
+                render_imgs.append(rendered_img)
+            elif "paint" in op:
+                gaussian = self.layers[i](
+                    kwargs['imgs'],
+                    metas['mask_img'],
+                    gaussian,
+                    metas
+                )
+            elif "render" in op:
+                gaussian, rendered_img = self.layers[i](
+                    instance_feature,
                     gaussian,
                     metas
                 )

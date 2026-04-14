@@ -4,14 +4,10 @@ _base_ = [
     '../_base_/surroundocc.py'
 ]
 
-# dataset label
-dataset_name_flag = 'occ3d'
-eval_mask_flag = False
-pc_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
 # =========== data config ==============
 input_shape = (1600, 864)
 data_aug_conf = {
-    "resize_lim": (0.5, 0.5),
+    "resize_lim": (1.0, 1.0),
     "final_dim": input_shape[::-1],
     "bot_pct_lim": (0.0, 0.0),
     "rot_lim": (0.0, 0.0),
@@ -20,60 +16,11 @@ data_aug_conf = {
     "rand_flip": True,
 }
 val_dataset_config = dict(
-    data_aug_conf=data_aug_conf
+    data_aug_conf=data_aug_conf,
 )
 train_dataset_config = dict(
-    data_aug_conf=data_aug_conf
-)
-
-occ3d_path = "data/occ3d/gts"  # Occ3D标注路径
-img_norm_cfg = dict(
-    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True
-)
-train_pipeline = [
-    dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadOccupancyOcc3D", occ3d_path=occ3d_path, semantic=True, use_ego=False, pc_range=pc_range, grid_size=0.4),  # 使用新的Occ3D加载器
-    dict(type="ResizeCropFlipImage"),
-    dict(type="PhotoMetricDistortionMultiViewImage"),
-    dict(type="NormalizeMultiviewImage", **img_norm_cfg),
-    dict(type="DefaultFormatBundle"),
-    dict(type="NuScenesAdaptor", use_ego=False, num_cams=6),
-]
-
-test_pipeline = [
-    dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadOccupancyOcc3D", occ3d_path=occ3d_path, semantic=True, use_ego=False, pc_range=pc_range, grid_size=0.4),  # 使用新的Occ3D加载器
-    dict(type="ResizeCropFlipImage"),
-    dict(type="NormalizeMultiviewImage", **img_norm_cfg),
-    dict(type="DefaultFormatBundle"),
-    dict(type="NuScenesAdaptor", use_ego=False, num_cams=6),
-]
-
-data_root = "data/nuscenes/"
-anno_root = "data/nuscenes_cam/"
-train_dataset_config = dict(
-    type='NuScenesDataset',
-    data_root=data_root,
-    imageset=anno_root + "nuscenes_infos_train_sweeps_occ.pkl",
     data_aug_conf=data_aug_conf,
-    pipeline=train_pipeline,
-    occ3d=True,
-    phase='train'
 )
-
-val_dataset_config = dict(
-    type='NuScenesDataset',
-    data_root=data_root,
-    imageset=anno_root + "nuscenes_infos_val_sweeps_occ.pkl",
-    data_aug_conf=data_aug_conf,
-    pipeline=test_pipeline,
-    occ3d=True,
-    phase='val'
-)
-
-train_dataset_config.update(pipeline=train_pipeline)
-val_dataset_config.update(pipeline=test_pipeline)
-
 # =========== misc config ==============
 optimizer = dict(
     optimizer = dict(
@@ -107,8 +54,14 @@ loss = dict(
             manual_class_weight=[
                 1.01552756, 1.06897009, 1.30013094, 1.07253735, 0.94637502, 1.10087012,
                 1.26960524, 1.06258364, 1.189019,   1.06217292, 1.00595144, 0.85706115,
-                1.03923299, 0.90867526, 0.8936431,  0.85486129, 0.8527829,  0.5       ]),
-        ])
+                1.03923299, 0.90867526, 0.8936431,  0.85486129, 0.8527829,  0.5       ],
+            ignore_empty=False,
+            lovasz_use_softmax=False),
+        dict(
+            type='RenderLoss',
+            weight=0.001,
+        )
+        ],)
 
 loss_input_convertion = dict(
     pred_occ="pred_occ",
@@ -116,13 +69,17 @@ loss_input_convertion = dict(
     sampled_xyz="sampled_xyz",
     sampled_label="sampled_label",
     occ_mask="occ_mask",
+    render_imgs="render_imgs",
+    imgs="imgs",
+    mask_img="mask_img",
 )
 # ========= model config ===============
 embed_dims = 128
 num_decoder = 2
 num_single_frame_decoder = 1
 num_densify_frame_decoder= 1
-scale_range = [0.08, 0.64]
+pc_range = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
+scale_range = [0.01, 1.8]
 xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
 include_opa = True
@@ -143,8 +100,6 @@ model = dict(
         norm_eval=True,
         style='caffe',
         with_cp = True,),
-        #dcn=dict(type='DCNv2', deform_groups=1, fallback_on_stride=False), # original DCNv2 will print log when perform load_state_dict
-        #stage_with_dcn=(False, False, True, True)),
     img_neck=dict(
         start_level=1),
     lifter=dict(
@@ -157,8 +112,6 @@ model = dict(
         semantics=semantics,
         semantic_dim=semantic_dim,
         include_opa=include_opa,
-        pc_range=pc_range,
-        voxel_size=0.4,
     ),
     encoder=dict(
         type='GaussianOccEncoder',
@@ -203,13 +156,18 @@ model = dict(
             semantics_activation='softplus',
         ),
         densify_layer=dict(
-            type='TopkDensifyModule',
+            type='DensifyOnly',
             feat_embed_dim = 128,
             semantic_dim = 17,
             topk_count = 2560,
             pc_range = pc_range,
             scale_range = scale_range,
             unit_xyz=[4.0, 4.0, 1.0],
+            K=27,
+        ),
+        gaussian_photo=dict(
+            type='GaussianPhoto',
+            scale_idx=4,
         ),
         spconv_layer=dict(
             _delete_=True,
@@ -217,7 +175,7 @@ model = dict(
             in_channels=embed_dims,
             embed_channels=embed_dims,
             pc_range=pc_range,
-            grid_size=[0.4, 0.4, 0.4],
+            grid_size=[0.5, 0.5, 0.5],
             phi_activation=phi_activation,
             xyz_coordinate=xyz_coordinate,
             use_out_proj=True,
@@ -229,15 +187,21 @@ model = dict(
             "ffn",
             "norm",
             "refine",
-        ] * num_single_frame_decoder + [
+            "photo",
+        ] + [
+            "spconv",
+            "norm",
+            "densify",
+            "photo",
+        ] * 4 + [
             "spconv",
             "norm",
             "deformable",
             "ffn",
             "norm",
             "refine",
-            "densify",
-        ] * 3,
+            "photo",
+        ]
     ),
     head=dict(
         type='GaussianHead',
@@ -249,11 +213,14 @@ model = dict(
             scale=[100, 100, 8.0],
         ),
         with_empty=True,
+        use_localaggprob=True,
+        use_localaggprob_fast=True,
+        combine_geosem=True,
         cuda_kwargs=dict(
             _delete_=True,
-            scale_multiplier=3,
+            scale_multiplier=4,
             H=200, W=200, D=16,
-            pc_min=[-40.0, -40.0, -1.0],
-            grid_size=0.4),
+            pc_min=[-50.0, -50.0, -5.0],
+            grid_size=0.5),
     )
 )

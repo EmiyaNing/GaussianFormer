@@ -44,17 +44,23 @@ class RenderLoss(BaseLoss):
             imgs:        with shape B, N, C, H, W.
         '''
   
-        means = torch.tensor([123.675, 116.28, 103.53], device=imgs.device).view(1, 1, 3, 1, 1)
-        stds = torch.tensor([58.395, 57.12, 57.375], device=imgs.device).view(1, 1, 3, 1, 1)
+        means = torch.tensor([123.675, 116.28, 103.53], device=imgs.device).view(1, 3, 1, 1)
+        stds = torch.tensor([58.395, 57.12, 57.375], device=imgs.device).view(1, 3, 1, 1)
 
         if isinstance(render_imgs, torch.Tensor):
             render_imgs = [render_imgs]
 
+        B, N, C, H, W = imgs.shape
+        imgs = imgs.view(B * N, C, H, W)
+        mask_img = mask_img.view(B * N, 1, H, W)
+        imgs = F.interpolate(imgs, scale_factor=0.25, mode='bilinear', align_corners=False)
+        mask_img = F.interpolate(mask_img, scale_factor=0.25, mode='nearest')
         imgs_denorm = imgs.float() * stds + means
         imgs_denorm = imgs_denorm.clamp(0, 255)
         # project the imgs value sapce from [0, 255] to [0, 1]
         # and mask the image region needs to be considered.
-        imgs_denorm = (imgs_denorm * mask_img) / 255.0        
+        imgs_denorm = (imgs_denorm * mask_img) / 255.0     
+           
         
         
 
@@ -65,9 +71,9 @@ class RenderLoss(BaseLoss):
 
             # D-SSIM loss
             # Input shape (B*N, C, H, W)
-            B, N, C, H, W = render.shape
-            render_flat = render.view(B * N, C, H, W)
-            imgs_flat = imgs_denorm.view(B * N, C, H, W)
+            B, N, C, H1, W1 = render.shape
+            render_flat = render.view(B * N, C, H1, W1)
+            imgs_flat = imgs_denorm.view(B * N, C, H1, W1)
             dssim_loss = 1 - self.ssim_loss_fn(render_flat, imgs_flat)
 
             # weighted add function

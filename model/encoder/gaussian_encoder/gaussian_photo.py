@@ -16,8 +16,9 @@ class GaussianPhoto(BaseModule):
     Then, this module render surround view image from these gaussians.
     The surround view image will be used to calculate the photometric supervise loss.
     '''
-    def __init__(self):
+    def __init__(self, scale_idx=4):
         super().__init__()
+        self.scale_idx = scale_idx
 
 
     def forward(self,
@@ -88,8 +89,8 @@ class GaussianPhoto(BaseModule):
         W = image_wh[..., 0].int()
         H = image_wh[..., 1].int()
         # 使用第一个批次和第一个视图的尺寸作为渲染尺寸（假设所有视图尺寸相同）
-        render_height = H[0, 0].item() // 4
-        render_width = W[0, 0].item() // 4
+        render_height = H[0, 0].item() // self.scale_idx
+        render_width = W[0, 0].item() // self.scale_idx
         
         # 准备渲染输出列表
         rendered_list = []

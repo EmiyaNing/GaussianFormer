@@ -259,10 +259,10 @@ def main(local_rank, args):
                     import cv2
                     for stage_idx, renders in enumerate(render_list):
                         renders = renders[0].permute(0, 2, 3, 1)
-                        for idx, cur_view in enumerate(renders):
+                        for view_idx, cur_view in enumerate(renders):
                             cur_view = (cur_view * 255).detach().cpu().numpy().astype(np.uint8)
-                            name = os.path.join(save_dir, 'stage-' + str(stage_idx) + 'render-'+str(idx) + '.png')
-                            print("current display the image with idx: ", idx)
+                            name = os.path.join(save_dir, 'scene-' + str(i_iter_val) + '-stage-' + str(stage_idx) + 'render-'+str(view_idx) + '.png')
+                            print("current display the image with idx: ", i_iter_val)
                             cv2.imwrite(name, cur_view) 
                 miou_metric._after_step(pred_occ, gt_occ)
             
