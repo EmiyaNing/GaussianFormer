@@ -18,6 +18,7 @@ class GaussianOccEncoder(BaseEncoder):
         mid_refine_layer: dict = None,
         densify_layer: dict = None,
         spconv_layer: dict = None,
+        ball_query_attn: dict = None,
         voxel_query_layer: dict = None,
         num_decoder: int = 6,
         operation_order: Optional[List[str]] = None,
@@ -54,6 +55,7 @@ class GaussianOccEncoder(BaseEncoder):
             "densify" : [densify_layer, MODELS],
             "mid_refine":[mid_refine_layer, MODELS],
             "spconv": [spconv_layer, MODELS],
+            "bqattn": [ball_query_attn, MODELS],
             "query": [voxel_query_layer, MODELS],
         }
         self.layers = nn.ModuleList(
@@ -137,6 +139,11 @@ class GaussianOccEncoder(BaseEncoder):
                     gaussian,
                     instance_feature,
                     multi_stride_features
+                )
+            elif "bqattn" in op:
+                instance_feature = self.layers[i](
+                    anchor,
+                    instance_feature
                 )
             else:
                 raise NotImplementedError(f"{op} is not supported.")

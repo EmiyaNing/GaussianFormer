@@ -11,6 +11,10 @@ from matplotlib import cm, colors
 from pyquaternion import Quaternion
 from mpl_toolkits.axes_grid1 import ImageGrid
 import open3d as o3d
+import open3d.core as o3c
+import open3d.visualization.gui as gui
+
+gui.Application.instance.initialize()
 
 # 内存监控装饰器
 def memory_monitor(func):
@@ -96,6 +100,22 @@ def get_nuscenes_colormap():
     ).astype(np.float32) / 255.
     return colors
 
+def get_sphere_template(resolution=4, device='cuda'):
+    """获取单位球体的顶点和面模板，缓存在内存中"""
+    if not hasattr(get_sphere_template, '_cache'):
+        get_sphere_template._cache = {}
+    key = (resolution, device)
+    if key not in get_sphere_template._cache:
+        # 在CPU上创建球体
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.0, resolution=resolution)
+        vertices = np.asarray(sphere.vertices, dtype=np.float32)  # (V, 3)
+        triangles = np.asarray(sphere.triangles, dtype=np.float32)  # (F, 3)
+        # 转换为PyTorch张量并移到指定设备
+        vertices_tensor = torch.from_numpy(vertices).to(device)
+        triangles_tensor = torch.from_numpy(triangles).to(device)
+        get_sphere_template._cache[key] = (vertices_tensor, triangles_tensor)
+    return get_sphere_template._cache[key]
+
 @memory_monitor
 def create_voxel_grid_from_occupancy(occ_data, voxel_size, vox_origin, sem=False, dataset='nusc', max_voxels=50000):
     """从占用数据创建Open3D点云可视化 - 优化内存版本（使用点云代替网格）"""
@@ -171,7 +191,7 @@ def create_voxel_grid_from_occupancy(occ_data, voxel_size, vox_origin, sem=False
     
     return [pcd]
 
-@memory_monitor
+
 def save_occ(save_dir, occ_data, name, sem=False, cap=2, dataset='nusc', show_window=True):
     """使用Open3D体素网格的3D占用可视化 - 优化内存版本"""
     print(f"[save_occ] {name}")
@@ -282,28 +302,15 @@ def create_ellipsoid(center, radii, rotation, color, opacity=1.0, resolution=4):
     
     return sphere
 
+
 @memory_monitor
 def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, filter_zsize=False, show_window=True, max_gaussians=25600):
-    """使用Open3D的高斯分布3D可视化 - 优化内存版本"""
     print(f"[save_gaussian] 开始处理 {name}")
-    
-    try:
-        import open3d as o3d
-    except Exception as e:
-        print(f"✗ 无法导入Open3D: {e}")
-        return
 
     empty_label = 17
     sem_cmap = get_nuscenes_colormap()
 
-    # 保存高斯属性（可选）- 只在需要时保存
-    try:
-        if len(gaussian_data.means) > 0 and len(gaussian_data.means[0]) > 0:
-            torch.save(gaussian_data, os.path.join(save_dir, f'{name}_attr.pth'))
-    except:
-        print("⚠ 无法保存高斯属性文件")
-
-    # 提取高斯参数 - 优化内存使用
+    # ---------- 提取高斯参数 ----------
     if len(gaussian_data.means) > 0:
         means = gaussian_data.means[0].detach().cpu().numpy()
         scales = gaussian_data.scales[0].detach().cpu().numpy()
@@ -311,7 +318,7 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
     else:
         print("⚠ 没有高斯数据可处理")
         return
-    
+
     if gaussian_data.opacities.shape[0]:
         opas = gaussian_data.opacities[0]
         if opas.numel() == 0:
@@ -319,7 +326,7 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
         opas = opas.squeeze().detach().cpu().numpy()
     else:
         opas = np.array([1.0])
-    
+
     if gaussian_data.semantics.shape[0]:
         sems = gaussian_data.semantics[0].detach().cpu().numpy()
         pred = np.argmax(sems, axis=-1)
@@ -329,9 +336,7 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
     # 过滤条件
     if ignore_opa:
         opas[:] = 1.
-        mask = (pred != empty_label)
-    else:
-        mask = (pred != empty_label) & (opas > 0.75)
+    mask = (pred != empty_label)
 
     if filter_zsize:
         if len(means) > 0:
@@ -342,7 +347,6 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
                 binr = zbins[idx + 1]
                 zmsk = (means[:, 2] < binl) | (means[:, 2] > binr)
                 mask = mask & zmsk
-            
             z_small_mask = scales[:, 2] > 0.1
             mask = z_small_mask & mask
 
@@ -354,12 +358,10 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
         pred = pred[mask]
 
     print(f"[save_gaussian] 有效高斯点数量: {len(means)}")
-
     if len(means) == 0:
         print("⚠ 没有有效的高斯点可可视化")
         return
 
-    # 如果高斯点数量过多，进行采样
     if len(means) > max_gaussians:
         print(f"⚠ 高斯点数量过多 ({len(means)})，进行采样到 {max_gaussians}")
         indices = np.random.choice(len(means), max_gaussians, replace=False)
@@ -369,65 +371,72 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
         opas = opas[indices]
         pred = pred[indices]
 
-    # 创建Open3D可视化
+    # ---------- 合并所有椭球体为单个网格 ----------
+    resolution = 16
+    template_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.0, resolution=resolution)
+    base_vertices = np.asarray(template_sphere.vertices, dtype=np.float32)   # (V, 3)
+    base_triangles = np.asarray(template_sphere.triangles, dtype=np.int32)   # (F, 3)
+
+    all_vertices = []
+    all_triangles = []
+    all_colors = []
+
+    vertex_offset = 0
+
+    for idx in range(len(means)):
+        center = means[idx]
+        radii = scales[idx] * scalar
+        rot_matrix = Quaternion(rotations[idx]).rotation_matrix
+
+        color = sem_cmap[pred[idx]][:3]
+        if np.allclose(color, [1.0, 1.0, 1.0], atol=0.1):
+            continue
+
+        # 缩放 -> 旋转 -> 平移
+        transformed_vertices = base_vertices * radii
+        transformed_vertices = np.dot(transformed_vertices, rot_matrix.T)
+        transformed_vertices += center
+
+        all_vertices.append(transformed_vertices)
+        all_triangles.append(base_triangles + vertex_offset)
+        all_colors.append(np.tile(color, (len(base_vertices), 1)))
+
+        vertex_offset += len(base_vertices)
+
+    if len(all_vertices) == 0:
+        print("⚠ 没有可渲染的高斯球（可能全被过滤为白色）")
+        return
+
+    all_vertices = np.vstack(all_vertices)
+    all_triangles = np.vstack(all_triangles)
+    all_colors = np.vstack(all_colors)
+
+    combined_mesh = o3d.geometry.TriangleMesh()
+    combined_mesh.vertices = o3d.utility.Vector3dVector(all_vertices)
+    combined_mesh.triangles = o3d.utility.Vector3iVector(all_triangles)
+    combined_mesh.vertex_colors = o3d.utility.Vector3dVector(all_colors)
+    combined_mesh.compute_vertex_normals()
+
+    print(f"[save_gaussian] 合并网格：顶点数 {len(all_vertices)}，面片数 {len(all_triangles)}")
+
+    # ---------- 可视化（确保 GUI 已初始化）----------
     vis = o3d.visualization.Visualizer()
     
     # 根据参数决定是否显示窗口
     if show_window:
-        vis.create_window(window_name=f"3D Gaussians: {name}", width=1200, height=800)
+        vis.create_window(window_name=f"3D Gaussian Points: {name}", width=1200, height=800)
         print("✓ 创建交互式3D窗口")
     else:
         vis.create_window(width=2560, height=1440, visible=False)
         print("✓ 使用离屏渲染")
     
-    # 添加每个高斯椭球体 - 使用批次处理减少内存峰值
-    geometries_added = 0
-    batch_size = 1000  # 分批处理避免内存峰值
+    # 添加点云到可视化
+    vis.add_geometry(combined_mesh)
     
-    for batch_start in range(0, len(means), batch_size):
-        batch_end = min(batch_start + batch_size, len(means))
-        batch_geometries = []
-        
-        for idx in range(batch_start, batch_end):
-            center = means[idx]
-            radii = scales[idx] * scalar
-            
-            # 将四元数转换为旋转矩阵
-            rot_matrix = Quaternion(rotations[idx]).rotation_matrix
-            
-            # 获取颜色
-            if len(pred) > idx:
-                color = sem_cmap[pred[idx]]
-            else:
-                color = sem_cmap[0]  # 默认颜色
-            
-            # 跳过白色高斯（可选）
-            if np.allclose(color[:3], [1.0, 1.0, 1.0], atol=0.1):
-                continue
-            
-            # 创建椭球体 - 使用更低的分辨率
-            ellipsoid = create_ellipsoid(center, radii, rot_matrix, color,
-                                       opas[idx] if len(opas) > idx else 1.0,
-                                       resolution=4)  # 降低分辨率减少内存
-            batch_geometries.append(ellipsoid)
-        
-        # 批量添加到可视化器
-        for geometry in batch_geometries:
-            vis.add_geometry(geometry)
-            geometries_added += 1
-        
-        # 清理批次内存
-        del batch_geometries
-        clear_memory()
-        
-        print(f"[save_gaussian] 已处理 {geometries_added}/{len(means)} 个高斯点")
-    
-    print(f"[save_gaussian] 总共添加了 {geometries_added} 个椭球体")
-    
-    # 设置渲染选项
+    # 设置渲染选项 - 调整点的大小以获得更好的可视化效果
     render_option = vis.get_render_option()
     render_option.background_color = np.array([1, 1, 1])  # 白色背景
-    render_option.mesh_show_back_face = True
+    render_option.point_size = 3.0  # 设置点的大小
     render_option.show_coordinate_frame = True
     
     # 设置相机
@@ -441,7 +450,7 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
     vis.update_renderer()
     
     # 保存截图
-    filepath = os.path.join(save_dir, f'{name}.png')
+    filepath = os.path.join(save_dir, f'{name}_point.png')
     vis.capture_screen_image(filepath)
     print(f"✓ 截图保存到: {filepath}")
     
@@ -456,7 +465,8 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
     vis.destroy_window()
     
     # 清理内存
-    clear_memory()
+    #del pcd, means, opas, pred, point_colors
+    #clear_memory()
     
     print(f"[save_gaussian] 完成 {name}")
 
