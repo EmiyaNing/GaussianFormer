@@ -7,3 +7,4 @@ from .gaussian_voxel_sp_lifter import GaussianVoxelSPLifter
 from .guassian_voxel_lifter_only import GaussianVoxelLifterOnly
 from .voxel_gaussian_lifter import GaussianVoxelLearnear
 from .dsvt_lifter import GaussianDSVT
+from .gaussian_liter_lite import GaussianVoxelLite

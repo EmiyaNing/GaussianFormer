@@ -14,3 +14,4 @@ from .geometric_renfine_only import GaussianGeometricRefine
 from .semantic_renfine_only import GaussianSemanticRefine
 from .paint_gaussian import GaussianPainter
 from .photo2render import Photo2Render
+from .densify_esgformer.densify_module import DensifyAdaptive

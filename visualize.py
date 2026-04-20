@@ -237,17 +237,17 @@ def main(local_rank, args):
                         f'val_{i_iter_val}_gaussian',
                         **draw_gaussian_params)
                 if args.vis_gaussian_point:
-                    from vis_open3d_voxel import save_gaussian_point
-                    save_gaussian_point(
+                    from vis_open3d_voxel import save_gaussian
+                    save_gaussian(
                         save_dir,
                         result_dict['gaussian'],
                         f'val_{i_iter_val}_gaussian',
                         **draw_gaussian_params
                     )
                 if args.vis_gaussian_each_stage:
-                    from vis_open3d_voxel import save_gaussian_point
+                    from vis_open3d_voxel import save_gaussian
                     for gaussian in result_dict['gaussians']:
-                        save_gaussian_point(
+                        save_gaussian(
                             save_dir,
                             gaussian,
                             f'val_{i_iter_val}_gaussian',
