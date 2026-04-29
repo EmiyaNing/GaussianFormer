@@ -247,7 +247,7 @@ def main(local_rank, args):
                 if args.vis_gaussian_each_stage:
                     from vis_open3d_voxel import save_gaussian_point
                     for gaussian in result_dict['gaussians']:
-                        save_gaussian_point(
+                        save_gaussian(
                             save_dir,
                             gaussian,
                             f'val_{i_iter_val}_gaussian',

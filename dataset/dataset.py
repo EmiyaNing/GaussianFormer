@@ -18,6 +18,7 @@ class NuScenesDataset(Dataset):
         imageset=None,
         data_aug_conf=None,
         pipeline=None,
+        num_lidar_history=0,
         vis_indices=None,
         pc_range=[-50.0, -50.0, -5.0, 50.0, 50.0, 3.0],
         occ3d=False,
@@ -47,6 +48,7 @@ class NuScenesDataset(Dataset):
 
         self.data_aug_conf = data_aug_conf
         self.pc_range  = pc_range
+        self.num_lidar_history = num_lidar_history
         self.test_mode = (phase != 'train')
         self.occ3d = occ3d
         self.pipeline = []
@@ -109,7 +111,7 @@ class NuScenesDataset(Dataset):
     def __getitem__(self, index):
         scene_token, index = self.keyframes[index]
         info = deepcopy(self.scene_infos[scene_token][index])
-        input_dict = self.get_data_info(info)
+        input_dict = self.get_data_info(info, scene_token=scene_token, frame_index=index)
 
         if self.data_aug_conf is not None:
             input_dict["aug_configs"] = self._sample_augmentation()
@@ -119,7 +121,7 @@ class NuScenesDataset(Dataset):
         return_dict = {k: input_dict[k] for k in self.return_keys}
         return return_dict
     
-    def get_data_info(self, info):
+    def get_data_info(self, info, scene_token=None, frame_index=None):
         f = 0.0055
         image_paths = []
         lidar2img_rts = []
@@ -137,7 +139,12 @@ class NuScenesDataset(Dataset):
         ego2global = np.eye(4)
         ego2global[:3, :3] = Quaternion(info['data']['LIDAR_TOP']['pose']['rotation']).rotation_matrix
         ego2global[:3, 3] = np.asarray(info['data']['LIDAR_TOP']['pose']['translation']).T
-        lidar_points = self.load_lidar_points(info['data']['LIDAR_TOP']['filename'])
+        lidar_history = self.collect_lidar_history(info, scene_token=scene_token, frame_index=frame_index)
+        lidar_points = self.load_lidar_points_with_history(
+            info['data']['LIDAR_TOP']['filename'],
+            lidar2global,
+            lidar_history,
+        )
         if self.occ3d:
             lidar_reflect = lidar_points[:, 2:3]
             lidar_points[:, 3] = 1.0
@@ -177,7 +184,7 @@ class NuScenesDataset(Dataset):
             occ_path=info.get("occ_path", ""),
             timestamp=info["timestamp"] / 1e6,
             img_filename=image_paths,
-            pts_filename=os.path.join(self.data_path, info['data']['LIDAR_TOP']['filename']),
+            pts_filename=os.path.abspath(os.path.join(self.data_path, info['data']['LIDAR_TOP']['filename'])),
             ego2lidar=ego2lidar,
             lidar2img=np.asarray(lidar2img_rts),
             ego2img=np.asarray(ego2image_rts),
@@ -185,7 +192,8 @@ class NuScenesDataset(Dataset):
             focal_positions=np.asarray(focal_positions),
             lidar_points=lidar_points,  # [N, 4] 点云数据 (x, y, z, intensity)
             lidar_pose=lidar2global,    # LiDAR到全局坐标系的变换矩阵
-            ego_pose=ego2global         # Ego到全局坐标系的变换矩阵
+            ego_pose=ego2global,        # Ego到全局坐标系的变换矩阵
+            lidar_sweeps=lidar_history,
         )
         return input_dict
 
@@ -195,7 +203,7 @@ class NuScenesDataset(Dataset):
 
     def load_lidar_points(self, lidar_filename):
         """加载LiDAR点云数据"""
-        lidar_path = os.path.join(self.data_path, lidar_filename)
+        lidar_path = lidar_filename if os.path.isabs(lidar_filename) else os.path.join(self.data_path, lidar_filename)
     
         points = np.fromfile(lidar_path, dtype=np.float32)
         points = points.reshape(-1, 5)  # NuScenes: x, y, z, intensity, ring_index
@@ -203,3 +211,66 @@ class NuScenesDataset(Dataset):
         #points[:, 3] = 1.0
     
         return points
+
+    def collect_lidar_history(self, info, scene_token=None, frame_index=None):
+        if self.num_lidar_history <= 0:
+            return []
+
+        if scene_token is None:
+            scene_token = info['scene_token']
+        if frame_index is None:
+            raise ValueError('`frame_index` is required when collecting lidar history.')
+
+        history = []
+        scene_infos = self.scene_infos[scene_token]
+        for prev_idx in range(frame_index - 1, -1, -1):
+            prev_info = scene_infos[prev_idx]
+            prev_lidar_info = prev_info.get('data', {}).get('LIDAR_TOP')
+            if prev_lidar_info is None:
+                continue
+
+            history.append(
+                dict(
+                    pts_filename=os.path.abspath(os.path.join(self.data_path, prev_lidar_info['filename'])),
+                    lidar_pose=get_lidar2global(
+                        prev_lidar_info['calib'],
+                        prev_lidar_info['pose'],
+                    ),
+                )
+            )
+            if len(history) >= self.num_lidar_history:
+                break
+
+        return history
+
+    def transform_points_to_target(self, points, source_pose, target_pose):
+        if points.shape[0] == 0:
+            return points
+
+        points_hom = np.concatenate(
+            [points[:, :3], np.ones((points.shape[0], 1), dtype=points.dtype)],
+            axis=-1,
+        )
+        target_from_source = np.linalg.inv(target_pose) @ source_pose
+        transformed_xyz = (target_from_source @ points_hom.T).T[:, :3]
+
+        if points.shape[1] > 3:
+            transformed_points = np.concatenate([transformed_xyz, points[:, 3:]], axis=-1)
+        else:
+            transformed_points = transformed_xyz
+        return transformed_points.astype(points.dtype, copy=False)
+
+    def load_lidar_points_with_history(self, lidar_filename, lidar_pose, lidar_history):
+        current_points = self.load_lidar_points(lidar_filename)
+        fused_points = [current_points]
+
+        for sweep in lidar_history:
+            sweep_points = self.load_lidar_points(sweep['pts_filename'])
+            sweep_points = self.transform_points_to_target(
+                sweep_points,
+                sweep['lidar_pose'],
+                lidar_pose,
+            )
+            fused_points.append(sweep_points)
+
+        return np.concatenate(fused_points, axis=0) if len(fused_points) > 1 else current_points

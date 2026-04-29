@@ -356,15 +356,45 @@ class LoadMultiViewImageFromFiles(object):
 @OPENOCC_TRANSFORMS.register_module()
 class LoadPointFromFile(object):
 
-    def __init__(self, pc_range, num_pts, use_ego=False):
+    def __init__(self, pc_range, num_pts, use_ego=False, num_lidar_history=9):
         self.use_ego = use_ego
         self.pc_range = pc_range
         self.num_pts = num_pts
+        self.num_lidar_history = num_lidar_history
+
+    def _load_points(self, pts_path):
+        scan = np.fromfile(pts_path, dtype=np.float32)
+        scan = scan.reshape((-1, 5))[:, :4]
+        return scan
+
+    def _transform_points_to_target(self, points, source_pose, target_pose):
+        if points.shape[0] == 0:
+            return points
+
+        points_hom = np.concatenate(
+            [points[:, :3], np.ones((points.shape[0], 1), dtype=points.dtype)],
+            axis=-1,
+        )
+        target_from_source = np.linalg.inv(target_pose) @ source_pose
+        transformed_xyz = (target_from_source @ points_hom.T).T[:, :3]
+        return np.concatenate([transformed_xyz, points[:, 3:]], axis=-1).astype(
+            points.dtype, copy=False
+        )
 
     def __call__(self, results):
         pts_path = results['pts_filename']
-        scan = np.fromfile(pts_path, dtype=np.float32)
-        scan = scan.reshape((-1, 5))[:, :4]
+        scan = self._load_points(pts_path)
+        lidar_sweeps = results.get('lidar_sweeps', [])
+        if self.num_lidar_history > 0 and len(lidar_sweeps) > 0:
+            fused_scans = [scan]
+            current_pose = results['lidar_pose']
+            for sweep in lidar_sweeps[:self.num_lidar_history]:
+                sweep_points = self._load_points(sweep['pts_filename'])
+                sweep_points = self._transform_points_to_target(
+                    sweep_points, sweep['lidar_pose'], current_pose
+                )
+                fused_scans.append(sweep_points)
+            scan = np.concatenate(fused_scans, axis=0)
         scan[:, 3] = 1.0 # n, 4
         if self.use_ego:
             ego2lidar = results['ego2lidar']
