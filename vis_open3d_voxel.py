@@ -362,14 +362,6 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
         print("⚠ 没有有效的高斯点可可视化")
         return
 
-    if len(means) > max_gaussians:
-        print(f"⚠ 高斯点数量过多 ({len(means)})，进行采样到 {max_gaussians}")
-        indices = np.random.choice(len(means), max_gaussians, replace=False)
-        means = means[indices]
-        scales = scales[indices]
-        rotations = rotations[indices]
-        opas = opas[indices]
-        pred = pred[indices]
 
     # ---------- 合并所有椭球体为单个网格 ----------
     resolution = 16
