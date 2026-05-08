@@ -17,11 +17,9 @@ data_aug_conf = {
 }
 val_dataset_config = dict(
     data_aug_conf=data_aug_conf,
-    num_lidar_history=9
 )
 train_dataset_config = dict(
     data_aug_conf=data_aug_conf,
-    num_lidar_history=9
 )
 # =========== misc config ==============
 optimizer = dict(
