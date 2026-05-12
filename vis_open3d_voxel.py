@@ -118,7 +118,7 @@ def get_sphere_template(resolution=4, device='cuda'):
 
 @memory_monitor
 def create_voxel_grid_from_occupancy(occ_data, voxel_size, vox_origin, sem=False, dataset='nusc', max_voxels=50000):
-    """从占用数据创建Open3D点云可视化 - 优化内存版本（使用点云代替网格）"""
+    """从占用数据创建Open3D体素网格可视化（使用正方体网格VoxelGrid）"""
     # 确保数据是numpy数组
     if isinstance(occ_data, torch.Tensor):
         voxels = occ_data[0].cpu().to(torch.int).numpy()
@@ -129,67 +129,72 @@ def create_voxel_grid_from_occupancy(occ_data, voxel_size, vox_origin, sem=False
     voxels[0, 0, 0] = 1
     voxels[-1, -1, -1] = 1
 
-    # 计算体素坐标 - 优化内存使用
+    # 获取颜色映射表
+    if sem:
+        colormap = get_nuscenes_colormap()
+
+    # 计算体素世界坐标和对应标签值
     grid_coords = get_grid_coords(voxels.shape, voxel_size) + np.array(vox_origin, dtype=np.float32).reshape([1, 3])
-    grid_coords = np.vstack([grid_coords.T, voxels.reshape(-1)]).T
+    grid_values = voxels.reshape(-1)
 
     # 获取FOV内的体素
     if sem:
         if dataset == 'nusc':
-            fov_voxels = grid_coords[
-                (grid_coords[:, 3] >= 0) & (grid_coords[:, 3] < 17)
-            ]
+            mask = (grid_values >= 0) & (grid_values < 17)
         elif dataset == 'kitti360':
-            fov_voxels = grid_coords[
-                (grid_coords[:, 3] > 0) & (grid_coords[:, 3] < 19)
-            ]
+            mask = (grid_values > 0) & (grid_values < 19)
         else:
-            fov_voxels = grid_coords[
-                (grid_coords[:, 3] > 0) & (grid_coords[:, 3] < 20)
-            ]
+            mask = (grid_values > 0) & (grid_values < 20)
     else:
-        fov_voxels = grid_coords[
-            (grid_coords[:, 3] > 0) & (grid_coords[:, 3] < 100)
-        ]
-    
-    print(f"[create_voxel_grid] 有效体素数量: {len(fov_voxels)}")
-    
+        mask = (grid_values > 0) & (grid_values < 100)
+
+    fov_coords = grid_coords[mask]
+    fov_values = grid_values[mask]
+
+    print(f"[create_voxel_grid] 有效体素数量: {len(fov_values)}")
+
     # 如果体素数量过多，进行采样
-    if len(fov_voxels) > max_voxels:
-        print(f"⚠ 体素数量过多 ({len(fov_voxels)})，进行采样到 {max_voxels}")
-        indices = np.random.choice(len(fov_voxels), max_voxels, replace=False)
-        fov_voxels = fov_voxels[indices]
-    
-    # 直接创建点云进行可视化，不再创建网格
-    points = fov_voxels[:, :3]
-    
-    # 创建点云对象
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    
-    # 为点云着色
-    if sem:
-        colors = get_nuscenes_colormap()
-        point_colors = []
-        
-        for i in range(len(fov_voxels)):
-            sem_value = int(fov_voxels[i, 3])
-            if 0 <= sem_value < len(colors):
-                color = colors[sem_value][:3]  # 只取RGB
+    if len(fov_values) > max_voxels:
+        print(f"⚠ 体素数量过多 ({len(fov_values)})，进行采样到 {max_voxels}")
+        indices = np.random.choice(len(fov_values), max_voxels, replace=False)
+        fov_coords = fov_coords[indices]
+        fov_values = fov_values[indices]
+
+    # 创建 Open3D VoxelGrid（正方体网格）
+    vox_origin_arr = np.array(vox_origin, dtype=np.float64)
+    voxel_size_f = float(voxel_size[0])  # 各向同性体素大小
+
+    voxel_grid = o3d.geometry.VoxelGrid()
+    voxel_grid.origin = vox_origin_arr
+    voxel_grid.voxel_size = voxel_size_f
+
+    # 计算每个体素在 VoxelGrid 中的整数网格索引并通过 add_voxel 逐个添加
+    half_voxel = np.array(voxel_size, dtype=np.float64) / 2.0
+    voxels_added = 0
+    for i in range(len(fov_coords)):
+        # 从世界坐标反推整数网格索引
+        grid_idx_arr = ((fov_coords[i] - vox_origin_arr - half_voxel) / voxel_size_f).astype(np.int32)
+
+        if sem:
+            sem_value = int(fov_values[i])
+            if 0 <= sem_value < len(colormap):
+                color = colormap[sem_value][:3].tolist()
             else:
-                color = [0.5, 0.5, 0.5]  # 默认灰色
-            point_colors.append(color)
-        
-        pcd.colors = o3d.utility.Vector3dVector(point_colors)
-    else:
-        # 非语义模式使用统一颜色
-        pcd.paint_uniform_color([0.5, 0.5, 0.5])  # 灰色
-    
+                color = [0.5, 0.5, 0.5]
+        else:
+            color = [0.5, 0.5, 0.5]
+
+        voxel = o3d.geometry.Voxel(grid_idx_arr.tolist(), color)
+        voxel_grid.add_voxel(voxel)
+        voxels_added += 1
+
+    print(f"[create_voxel_grid] VoxelGrid 创建完成，含 {voxels_added} 个正方体体素")
+
     # 清理临时变量释放内存
-    del grid_coords, fov_voxels
+    del grid_coords, fov_coords, fov_values
     clear_memory()
-    
-    return [pcd]
+
+    return [voxel_grid]
 
 
 def save_occ(save_dir, occ_data, name, sem=False, cap=2, dataset='nusc', show_window=True):
@@ -247,6 +252,9 @@ def save_occ(save_dir, occ_data, name, sem=False, cap=2, dataset='nusc', show_wi
     render_option.mesh_show_wireframe = False
     render_option.mesh_show_back_face = False
     render_option.show_coordinate_frame = True
+    # VoxelGrid 专用选项：显示正方体体素线框（让每个体素立方体边缘更清晰）
+    if hasattr(render_option, 'voxel_grid_show_wireframe'):
+        render_option.voxel_grid_show_wireframe = True
     
     # 设置相机参数
     ctr = vis.get_view_control()
@@ -280,6 +288,177 @@ def save_occ(save_dir, occ_data, name, sem=False, cap=2, dataset='nusc', show_wi
     clear_memory()
     
     print(f"[save_occ] 完成 {name}")
+
+
+def save_occ_error(save_dir, pred_occ, gt_occ, name, dataset='nusc', show_window=True, empty_label=17):
+    """预测错误分类可视化。
+
+    对于每个被模型预测为占用的体素（pred_occ != empty_label），按以下规则着色：
+      - 🟢 绿色 (0.0, 1.0, 0.0): 位置和语义类别均预测正确
+          条件：gt_occ != empty_label AND pred_occ == gt_occ
+      - 🔴 深红色 (0.55, 0.0, 0.0): 位置预测正确但语义类别错误
+          条件：gt_occ != empty_label AND pred_occ != gt_occ
+      - ⚫ 黑色 (0.0, 0.0, 0.0): 位置预测错误（假阳性）
+          条件：gt_occ == empty_label
+
+    Args:
+        save_dir:    保存目录
+        pred_occ:    (H, W, D) 预测的占用/语义标签（argmax 结果）
+        gt_occ:      (H, W, D) 真实的占用/语义标签
+        name:        文件名前缀
+        dataset:     数据集名称（'nusc' 或 'kitti'）
+        show_window: 是否显示交互式窗口
+        empty_label: 空体素的标签值（NuScenes 中为 17）
+    """
+    print(f"[save_occ_error] {name}")
+    print(f"  pred_occ shape: {pred_occ.shape}, gt_occ shape: {gt_occ.shape}")
+
+    try:
+        import open3d as o3d
+    except Exception as e:
+        print(f"✗ 无法导入 Open3D: {e}")
+        return
+
+    if dataset == 'nusc':
+        voxel_size = [0.5] * 3
+        vox_origin = [-50.0, -50.0, -5.0]
+    elif dataset == 'kitti':
+        voxel_size = [0.2] * 3
+        vox_origin = [0.0, -25.6, -2.0]
+    elif dataset == 'kitti360':
+        voxel_size = [0.2] * 3
+        vox_origin = [0.0, -25.6, -2.0]
+    else:
+        voxel_size = [0.5] * 3
+        vox_origin = [-50.0, -50.0, -5.0]
+
+    # 确保是 numpy 数组
+    if isinstance(pred_occ, torch.Tensor):
+        pred_occ_np = pred_occ.cpu().numpy()
+    else:
+        pred_occ_np = pred_occ
+    if isinstance(gt_occ, torch.Tensor):
+        gt_occ_np = gt_occ.cpu().numpy()
+    else:
+        gt_occ_np = gt_occ
+
+    # 确保是 3D (H, W, D)
+    if pred_occ_np.ndim == 4:
+        pred_occ_np = pred_occ_np[0]
+    if gt_occ_np.ndim == 4:
+        gt_occ_np = gt_occ_np[0]
+
+    # 获取体素网格坐标
+    grid_coords = get_grid_coords(pred_occ_np.shape, voxel_size)
+    grid_coords = grid_coords + np.array(vox_origin, dtype=np.float32).reshape([1, 3])
+
+    # 筛选出模型预测为占用的体素
+    pred_occ_flat = pred_occ_np.reshape(-1)
+    gt_occ_flat = gt_occ_np.reshape(-1)
+    pred_mask = pred_occ_flat != empty_label
+
+    pred_voxels = pred_occ_flat[pred_mask]
+    gt_voxels = gt_occ_flat[pred_mask]
+    coords = grid_coords[pred_mask]
+
+    print(f"  模型预测占用的体素数: {len(pred_voxels)}")
+
+    if len(pred_voxels) == 0:
+        print("  ⚠ 没有预测占用的体素，跳过可视化")
+        return
+
+    # 分类并着色
+    voxel_colors = []
+    for i in range(len(pred_voxels)):
+        if gt_voxels[i] != empty_label:
+            # GT 也为占用 → 位置预测正确
+            if pred_voxels[i] == gt_voxels[i]:
+                # 语义类别也正确 → 绿色
+                voxel_colors.append([0.0, 1.0, 0.0])
+            else:
+                # 语义类别错误 → 深红色
+                voxel_colors.append([0.8, 0.0, 0.0])
+        else:
+            # GT 为空 → 假阳性（位置预测错误）→ 黑色
+            voxel_colors.append([0.0, 0.0, 0.0])
+
+    voxel_colors = np.array(voxel_colors, dtype=np.float32)
+
+    # 统计各类别数量及百分比
+    green_mask = (voxel_colors[:, 0] == 0.0) & (voxel_colors[:, 1] == 1.0) & (voxel_colors[:, 2] == 0.0)
+    red_mask   = (voxel_colors[:, 0] == 0.8) & (voxel_colors[:, 1] == 0.0) & (voxel_colors[:, 2] == 0.0)
+    black_mask = (voxel_colors[:, 0] == 0.0) & (voxel_colors[:, 1] == 0.0) & (voxel_colors[:, 2] == 0.0)
+    n_green = green_mask.sum()
+    n_red   = red_mask.sum()
+    n_black = black_mask.sum()
+    n_total = n_green + n_red + n_black
+    if n_total > 0:
+        print(f"    🟢 位置和语义均正确 (绿色):   {n_green} ({n_green/n_total*100:.1f}%)")
+        print(f"    🔴 位置正确但语义错误 (深红):  {n_red} ({n_red/n_total*100:.1f}%)")
+        print(f"    ⚫ 假阳性/位置错误 (黑色):    {n_black} ({n_black/n_total*100:.1f}%)")
+    else:
+        print(f"    🟢 位置和语义均正确 (绿色):   {n_green}")
+        print(f"    🔴 位置正确但语义错误 (深红):  {n_red}")
+        print(f"    ⚫ 假阳性/位置错误 (黑色):    {n_black}")
+
+    # 创建 VoxelGrid（正方体网格）
+    vox_origin_arr = np.array(vox_origin, dtype=np.float64)
+    voxel_size_f = float(voxel_size[0])
+    half_voxel = np.array(voxel_size, dtype=np.float64) / 2.0
+
+    voxel_grid = o3d.geometry.VoxelGrid()
+    voxel_grid.origin = vox_origin_arr
+    voxel_grid.voxel_size = voxel_size_f
+
+    for i in range(len(coords)):
+        # 从世界坐标反推整数网格索引
+        grid_idx_arr = ((coords[i] - vox_origin_arr - half_voxel) / voxel_size_f).astype(np.int32)
+        color = voxel_colors[i].tolist()
+        voxel = o3d.geometry.Voxel(grid_idx_arr.tolist(), color)
+        voxel_grid.add_voxel(voxel)
+
+    print(f"  VoxelGrid 创建完成，含 {len(coords)} 个正方体体素")
+
+    # 创建可视化窗口
+    vis = o3d.visualization.Visualizer()
+    if show_window:
+        vis.create_window(window_name=f"Prediction Error Map: {name}", width=1200, height=800)
+    else:
+        vis.create_window(width=2560, height=1440, visible=False)
+
+    vis.add_geometry(voxel_grid)
+
+    # 渲染选项
+    render_option = vis.get_render_option()
+    render_option.background_color = np.array([1, 1, 1])  # 白色背景
+    render_option.show_coordinate_frame = True
+    # VoxelGrid 线框显示
+    if hasattr(render_option, 'voxel_grid_show_wireframe'):
+        render_option.voxel_grid_show_wireframe = True
+
+    # 相机视角
+    ctr = vis.get_view_control()
+    ctr.set_front([0, 0, -1])
+    ctr.set_up([0, -1, 0])
+    ctr.set_zoom(0.3)
+
+    vis.poll_events()
+    vis.update_renderer()
+
+    # 保存截图
+    filepath = os.path.join(save_dir, f'{name}_error_map.png')
+    vis.capture_screen_image(filepath)
+    print(f"  ✓ 截图保存到: {filepath}")
+
+    if show_window:
+        print("  🖱️  交互式窗口已打开，按 'Q' 或关闭窗口继续")
+        vis.run()
+
+    vis.destroy_window()
+    del voxel_grid, voxel_colors
+    clear_memory()
+    print(f"[save_occ_error] 完成 {name}")
+
 
 def create_ellipsoid(center, radii, rotation, color, opacity=1.0, resolution=4):
     """创建椭球体网格 - 优化内存版本"""
