@@ -12,3 +12,4 @@ from .voxel_query_module import VoxelQueryModule
 from .topk_module.topk_semantic_densify import SemanticDensify
 from .topk_module.topk_densify_v2 import DensifyOnly
 from .ball_query_crossattn import BallQueryCrossAttn
+from .history_cross_attn import HistoryCrossAttention

@@ -8,6 +8,7 @@ import math
 from copy import deepcopy
 
 from . import OPENOCC_TRANSFORMS
+from .utils import get_img2global
 
 
 @OPENOCC_TRANSFORMS.register_module()
@@ -350,6 +351,87 @@ class LoadMultiViewImageFromFiles(object):
         repr_str = self.__class__.__name__
         repr_str += f'(to_float32={self.to_float32}, '
         repr_str += f"color_type='{self.color_type}')"
+        return repr_str
+
+
+@OPENOCC_TRANSFORMS.register_module()
+class LoadMultiViewImageHistory(object):
+    """Load history frame multi-view images and merge into results.
+
+    Reads historical image frames and appends them to results['img'],
+    results['lidar2img'], and results['ego2img']. The downstream transforms
+    (ResizeCropFlipImage, etc.) then apply identically to all frames.
+
+    Args:
+        num_history (int): Number of history frames to load.
+        num_cams (int): Number of cameras per frame. Defaults to 6.
+        color_type (str): Color type for mmcv.imread. Defaults to 'unchanged'.
+        to_float32 (bool): Whether to convert images to float32. Defaults to True.
+    """
+
+    def __init__(self, num_history, num_cams=6, color_type='unchanged', to_float32=True):
+        self.num_history = num_history
+        self.num_cams = num_cams
+        self.color_type = color_type
+        self.to_float32 = to_float32
+
+    def __call__(self, results):
+        # Convert numpy arrays to lists so we can append history entries.
+        # Downstream transforms (ResizeCropFlipImage, NuScenesAdaptor) use
+        # indexing / np.stack which work identically on lists.
+        if isinstance(results.get('lidar2img'), np.ndarray):
+            results['lidar2img'] = list(results['lidar2img'])
+        if isinstance(results.get('ego2img'), np.ndarray):
+            results['ego2img'] = list(results['ego2img'])
+
+        ctx = results.get('history_context', None)
+
+        num_history_frame = 0
+        if ctx is not None and self.num_history > 0:
+            scene_infos = ctx['scene_infos']
+            scene_token = ctx['scene_token']
+            frame_index = ctx['frame_index']
+            data_path = ctx['data_path']
+            sensor_types = ctx['sensor_types']
+            lidar2global = results['lidar_pose']
+            ego2global = results['ego_pose']
+
+            for prev_idx in range(frame_index - 1, -1, -1):
+                prev_info = scene_infos[scene_token][prev_idx]
+
+                # Skip frame if any camera is missing
+                if not all(cam_type in prev_info.get('data', {}) for cam_type in sensor_types):
+                    continue
+
+                for ci, cam_type in enumerate(sensor_types):
+                    fname = os.path.join(data_path, prev_info['data'][cam_type]['filename'])
+                    img = mmcv.imread(fname, self.color_type)
+                    if self.to_float32:
+                        img = img.astype(np.float32)
+                    results['img'].append(img)
+
+                    img2global = get_img2global(
+                        prev_info['data'][cam_type]['calib'],
+                        prev_info['data'][cam_type]['pose'],
+                    )
+                    results['lidar2img'].append(np.linalg.inv(img2global) @ lidar2global)
+                    results['ego2img'].append(np.linalg.inv(img2global) @ ego2global)
+
+                num_history_frame += 1
+                if num_history_frame >= self.num_history:
+                    break
+
+        results['num_current_img'] = self.num_cams
+        results['num_history_frame'] = num_history_frame
+        results['img_shape'] = [x.shape[:2] for x in results['img']]
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(num_history={self.num_history}, '
+        repr_str += f'num_cams={self.num_cams}, '
+        repr_str += f"color_type='{self.color_type}', "
+        repr_str += f'to_float32={self.to_float32})'
         return repr_str
 
 

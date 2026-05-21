@@ -20,6 +20,7 @@ class GaussianOccEncoder(BaseEncoder):
         spconv_layer: dict = None,
         ball_query_attn: dict = None,
         voxel_query_layer: dict = None,
+        history_attn: dict = None,
         num_decoder: int = 6,
         operation_order: Optional[List[str]] = None,
         init_cfg=None,
@@ -57,6 +58,7 @@ class GaussianOccEncoder(BaseEncoder):
             "spconv": [spconv_layer, MODELS],
             "bqattn": [ball_query_attn, MODELS],
             "query": [voxel_query_layer, MODELS],
+            "history": [history_attn, MODELS],
         }
         self.layers = nn.ModuleList(
             [
@@ -106,7 +108,7 @@ class GaussianOccEncoder(BaseEncoder):
                 identity = instance_feature
             elif op == "add":
                 instance_feature = instance_feature + identity
-            elif op == "deformable":
+            elif op == "deformable" or op == "history":
                 instance_feature = self.layers[i](
                     instance_feature,
                     anchor,
