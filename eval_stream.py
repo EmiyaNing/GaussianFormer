@@ -19,7 +19,10 @@ from fifo_eval import (
     fuse_predictions,
     fused_soft_to_hard,
     soft_pred_to_grid,
+    GaussianFIFOQueue,
+    gaussian_fifo_fuse_and_render,
 )
+from model.encoder.gaussian_encoder.utils import GaussianPrediction
 
 
 def pass_print(*args, **kwargs):
@@ -191,6 +194,16 @@ def main(local_rank, args):
     else:
         fifo_queue = None
 
+    # ── Gaussian FIFO 队列初始化 ──
+    if args.stream_gaussian_fusion:
+        gaussian_fifo_queue = GaussianFIFOQueue(maxlen=args.temporal_windows)
+        logger.info(
+            f'[GaussianFIFO] 启用高斯流式融合: '
+            f'windows={args.temporal_windows}'
+        )
+    else:
+        gaussian_fifo_queue = None
+
     # ──────────────────────────────────────────────
     # 流式评估主循环
     # ──────────────────────────────────────────────
@@ -243,6 +256,9 @@ def main(local_rank, args):
                 if args.fifo:
                     fifo_queue.clear()
                     logger.info(f'[FIFO] 场景切换, FIFO 队列已清空')
+                if args.stream_gaussian_fusion:
+                    gaussian_fifo_queue.clear()
+                    logger.info(f'[GaussianFIFO] 场景切换, Gaussian FIFO 队列已清空')
 
                 if local_rank == 0:
                     logger.info(f'[STREAM] Starting scene: {scene_token}')
@@ -277,6 +293,7 @@ def main(local_rank, args):
                         curr_lidar2prev=curr_lidar2prev,
                         sampled_xyz_curr=curr_xyz,
                         grid_params=grid_params,
+                        mode=args.fusion_mode,
                     )
                     # fused_soft_flat: (C, N) → 硬标签 (N,)
                     fused_hard = fused_soft_to_hard(fused_soft_flat)
@@ -292,6 +309,53 @@ def main(local_rank, args):
                     )
 
                 pred_occ_for_metric = fused_occ_list  # list of (N,)
+            elif args.stream_gaussian_fusion:
+                # ── Gaussian FIFO 融合 ──
+                gaussian_batch = result_dict['gaussian']
+                batch_size = gaussian_batch.means.shape[0]
+                fused_occ_list = []
+                for idx in range(batch_size):
+                    curr_g = GaussianPrediction(
+                        means=gaussian_batch.means[idx:idx+1],
+                        scales=gaussian_batch.scales[idx:idx+1],
+                        rotations=gaussian_batch.rotations[idx:idx+1],
+                        opacities=gaussian_batch.opacities[idx:idx+1],
+                        semantics=gaussian_batch.semantics[idx:idx+1],
+                        original_means=(
+                            gaussian_batch.original_means[idx:idx+1]
+                            if gaussian_batch.original_means is not None else None),
+                        delta_means=(
+                            gaussian_batch.delta_means[idx:idx+1]
+                            if gaussian_batch.delta_means is not None else None),
+                    )
+                    fused_hard, _ = gaussian_fifo_fuse_and_render(
+                        curr_g, gaussian_fifo_queue,
+                        data['lidar2prev'][idx],
+                        result_dict['sampled_xyz'][idx:idx+1],
+                        raw_model.head,
+                        grid_params,
+                    )
+                    fused_occ_list.append(fused_hard)
+                    # 推入当前帧到 Gaussian FIFO 队列（CPU 存储，节省 GPU 显存）
+                    gaussian_fifo_queue.push(
+                        gaussian=GaussianPrediction(
+                            means=gaussian_batch.means[idx:idx+1].detach().cpu(),
+                            scales=gaussian_batch.scales[idx:idx+1].detach().cpu(),
+                            rotations=gaussian_batch.rotations[idx:idx+1].detach().cpu(),
+                            opacities=gaussian_batch.opacities[idx:idx+1].detach().cpu(),
+                            semantics=gaussian_batch.semantics[idx:idx+1].detach().cpu(),
+                            original_means=(
+                                gaussian_batch.original_means[idx:idx+1].detach().cpu()
+                                if gaussian_batch.original_means is not None else None),
+                            delta_means=(
+                                gaussian_batch.delta_means[idx:idx+1].detach().cpu()
+                                if gaussian_batch.delta_means is not None else None),
+                        ),
+                        lidar2prev=data['lidar2prev'][idx],
+                        frame_idx=scene_frame_counts.get(current_scene, 0) + idx,
+                        scene_token=scene_token,
+                    )
+                pred_occ_for_metric = fused_occ_list
             else:
                 batch_size = result_dict['final_occ'].shape[0]
                 pred_occ_for_metric = [
@@ -452,6 +516,12 @@ if __name__ == '__main__':
                         help='FIFO 队列长度（时序窗口大小）')
     parser.add_argument('--fusion-alpha', type=float, default=0.7,
                         help='时序融合权重 α: P_fused = P_curr * α + P_history * (1-α)')
+    parser.add_argument('--fusion-mode', type=str, default='conditional',
+                        choices=['simple', 'conditional'],
+                        help='融合模式: simple=所有体素加权平均, conditional=根据空/非空分情况融合')
+    # 基于 Semantic Gaussian 的 FIFO 流式融合
+    parser.add_argument('--stream-gaussian-fusion', action='store_true', default=False,
+                        help='启用基于 Semantic Gaussian 的 FIFO 流式融合评估')
     args = parser.parse_args()
 
     ngpus = torch.cuda.device_count()

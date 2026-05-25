@@ -1,11 +1,15 @@
 try:
-    from vis_open3d_voxel import save_occ, save_gaussian, save_gaussian_topdown, save_occ_error
+    from vis_open3d_voxel import (
+        save_occ, save_gaussian, save_gaussian_topdown,
+        save_occ_error, save_gaussian_with_gt_occ,
+        vis_gaussian_occ_match,
+    )
 except:
     try:
         from vis import save_occ, save_gaussian, save_gaussian_topdown
-        # save_occ_error 可能在 vis.py 中不存在，导入兜底
+        # save_occ_error / save_gaussian_with_gt_occ / vis_gaussian_occ_match 可能在 vis.py 中不存在，导入兜底
         try:
-            from vis_open3d_voxel import save_occ_error
+            from vis_open3d_voxel import save_occ_error, save_gaussian_with_gt_occ, vis_gaussian_occ_match
         except:
             pass
     except:
@@ -36,13 +40,18 @@ try:
         fuse_predictions,
         fused_soft_to_hard,
         soft_pred_to_grid,
+        GaussianFIFOQueue,
+        gaussian_fifo_fuse_and_render,
     )
+    from model.encoder.gaussian_encoder.utils import GaussianPrediction
 except ImportError as e:
     _fifo_available = False
+    _gaussian_fifo_available = False
     def fuse_predictions(*args, **kwargs):
         raise RuntimeError('fifo_eval 不可用，请确保 fifo_eval.py 存在')
 else:
     _fifo_available = True
+    _gaussian_fifo_available = True
 
 # ─── 网格参数（与 eval_stream.py 保持一致）───
 _H, _W, _D = 200, 200, 16
@@ -179,7 +188,7 @@ def main(local_rank, args):
 
     my_model.eval()
     os.environ['eval'] = 'true'
-    if args.vis_occ or args.vis_occ_error or args.vis_gaussian or args.vis_gaussian_point or args.vis_gaussian_topdown:
+    if args.vis_occ or args.vis_occ_error or args.vis_gaussian or args.vis_gaussian_point or args.vis_gaussian_topdown or args.vis_gaussian_match:
         save_dir = os.path.join(args.work_dir, f'vis_ep{args.epoch}')
         os.makedirs(save_dir, exist_ok=True)
     if args.model_type == "base":
@@ -287,6 +296,16 @@ def main(local_rank, args):
                         f'val_{i_iter_val}',
                         dataset=args.dataset)
 
+                # ── 高斯球与GT Occupancy几何匹配可视化 ──
+                if args.vis_gaussian_match:
+                    vis_gaussian_occ_match(
+                        save_dir,
+                        result_dict['gaussian'],
+                        gt_occ.reshape(*occ_shape),
+                        f'val_{i_iter_val}',
+                        dataset=args.dataset,
+                        **draw_gaussian_params)
+
                 miou_metric._after_step(pred_occ, gt_occ)
             
             if i_iter_val % print_freq == 0 and local_rank == 0:
@@ -308,12 +327,17 @@ def main_stream(local_rank, args):
     """流式评估可视化主函数。
 
     使用 NuScenesFlowDataset + SceneStream 按场景顺序逐帧读取数据，
-    支持 FIFO 时序融合可视化，并按场景组织可视化结果。
+    支持 FIFO 时序融合可视化以及 Semantic Gaussian FIFO 融合可视化，
+    并按场景组织可视化结果。
     """
     # 检查 FIFO 依赖
     if args.fifo and not _fifo_available:
         raise ImportError(
             '启用 FIFO 时序融合需要 fifo_eval.py，请确保该文件存在。'
+        )
+    if args.stream_gaussian_fusion and not _gaussian_fifo_available:
+        raise ImportError(
+            '启用 Gaussian FIFO 融合需要 fifo_eval.py 和 gaussian_encoder，请确保文件存在。'
         )
 
     # global settings
@@ -455,6 +479,16 @@ def main_stream(local_rank, args):
     else:
         fifo_queue = None
 
+    # ── Gaussian FIFO 队列初始化 ──
+    if args.stream_gaussian_fusion:
+        gaussian_fifo_queue = GaussianFIFOQueue(maxlen=args.temporal_windows)
+        logger.info(
+            f'[GaussianFIFO] 启用高斯流式融合可视化: '
+            f'windows={args.temporal_windows}'
+        )
+    else:
+        gaussian_fifo_queue = None
+
     # ── 可视化根目录 ──
     stream_vis_root = osp.join(args.work_dir, f'stream_vis_ep{args.epoch}')
     os.makedirs(stream_vis_root, exist_ok=True)
@@ -526,6 +560,9 @@ def main_stream(local_rank, args):
                 if args.fifo and fifo_queue is not None:
                     fifo_queue.clear()
                     logger.info(f'[FIFO] 场景切换, FIFO 队列已清空')
+                if args.stream_gaussian_fusion and gaussian_fifo_queue is not None:
+                    gaussian_fifo_queue.clear()
+                    logger.info(f'[GaussianFIFO] 场景切换, Gaussian FIFO 队列已清空')
 
                 # 场景级可视化目录
                 scene_vis_dir = osp.join(stream_vis_root, current_scene)
@@ -597,12 +634,13 @@ def main_stream(local_rank, args):
                     points=cated_points.detach().cpu().numpy(),
                     point_colors=cated_colors.detach().cpu().numpy())
 
-            # ── FIFO 时序融合 ──
+            # ── 时序融合 ──
             if args.fifo and fifo_queue is not None:
                 soft_pred_batch = result_dict['pred_occ'][-1]  # (B, C, N)
                 batch_size = soft_pred_batch.shape[0]
 
                 fused_occ_list = []
+                merged_gaussian_list = []
                 for idx in range(batch_size):
                     soft_pred = soft_pred_batch[idx]           # (C, N)
                     curr_lidar2prev = data['lidar2prev'][idx]  # (4, 4)
@@ -618,6 +656,7 @@ def main_stream(local_rank, args):
                     )
                     fused_hard = fused_soft_to_hard(fused_soft_flat)
                     fused_occ_list.append(fused_hard)
+                    merged_gaussian_list.append(None)
 
                     # 推入当前帧到 FIFO 队列
                     soft_pred_grid = soft_pred_to_grid(
@@ -630,11 +669,62 @@ def main_stream(local_rank, args):
                     )
 
                 pred_occ_for_metric = fused_occ_list  # list of (N,)
+            elif args.stream_gaussian_fusion and gaussian_fifo_queue is not None:
+                # ── Gaussian FIFO 融合 ──
+                gaussian_batch = result_dict['gaussian']
+                batch_size = gaussian_batch.means.shape[0]
+                fused_occ_list = []
+                merged_gaussian_list = []
+                for idx in range(batch_size):
+                    curr_g = GaussianPrediction(
+                        means=gaussian_batch.means[idx:idx+1],
+                        scales=gaussian_batch.scales[idx:idx+1],
+                        rotations=gaussian_batch.rotations[idx:idx+1],
+                        opacities=gaussian_batch.opacities[idx:idx+1],
+                        semantics=gaussian_batch.semantics[idx:idx+1],
+                        original_means=(
+                            gaussian_batch.original_means[idx:idx+1]
+                            if gaussian_batch.original_means is not None else None),
+                        delta_means=(
+                            gaussian_batch.delta_means[idx:idx+1]
+                            if gaussian_batch.delta_means is not None else None),
+                    )
+                    fused_hard, merged_g = gaussian_fifo_fuse_and_render(
+                        curr_g, gaussian_fifo_queue,
+                        data['lidar2prev'][idx],
+                        result_dict['sampled_xyz'][idx:idx+1],
+                        raw_model.head,
+                        _GRID_PARAMS,
+                    )
+                    fused_occ_list.append(fused_hard)
+                    merged_gaussian_list.append(merged_g)
+
+                    # 推入当前帧到 Gaussian FIFO 队列（CPU 存储）
+                    gaussian_fifo_queue.push(
+                        gaussian=GaussianPrediction(
+                            means=gaussian_batch.means[idx:idx+1].detach().cpu(),
+                            scales=gaussian_batch.scales[idx:idx+1].detach().cpu(),
+                            rotations=gaussian_batch.rotations[idx:idx+1].detach().cpu(),
+                            opacities=gaussian_batch.opacities[idx:idx+1].detach().cpu(),
+                            semantics=gaussian_batch.semantics[idx:idx+1].detach().cpu(),
+                            original_means=(
+                                gaussian_batch.original_means[idx:idx+1].detach().cpu()
+                                if gaussian_batch.original_means is not None else None),
+                            delta_means=(
+                                gaussian_batch.delta_means[idx:idx+1].detach().cpu()
+                                if gaussian_batch.delta_means is not None else None),
+                        ),
+                        lidar2prev=data['lidar2prev'][idx],
+                        frame_idx=scene_frame_counts.get(current_scene, 0) + idx,
+                        scene_token=scene_token,
+                    )
+                pred_occ_for_metric = fused_occ_list
             else:
                 batch_size = result_dict['final_occ'].shape[0]
                 pred_occ_for_metric = [
                     result_dict['final_occ'][idx] for idx in range(batch_size)
                 ]
+                merged_gaussian_list = [None] * batch_size
 
             # ── 帧计数 ──
             scene_frame_counts[current_scene] += batch_size
@@ -698,6 +788,34 @@ def main_stream(local_rank, args):
                         scene_vis_dir,
                         result_dict['gaussian'],
                         f'{frame_tag}_gaussian',
+                        **draw_gaussian_params)
+
+                # Gaussian FIFO 融合后的高斯可视化
+                if args.vis_gaussian and merged_gaussian_list[idx] is not None:
+                    save_gaussian(
+                        scene_vis_dir,
+                        merged_gaussian_list[idx],
+                        f'{frame_tag}_gaussian_fused',
+                        **draw_gaussian_params)
+
+                # Gaussian + GT Occupancy 叠加可视化
+                if args.vis_gaussian_occ:
+                    save_gaussian_with_gt_occ(
+                        scene_vis_dir,
+                        result_dict['gaussian'],
+                        gt_occ.reshape(*occ_shape),
+                        f'{frame_tag}',
+                        dataset=args.dataset,
+                        **draw_gaussian_params)
+
+                # 高斯球与GT Occupancy几何匹配可视化
+                if args.vis_gaussian_match:
+                    vis_gaussian_occ_match(
+                        scene_vis_dir,
+                        result_dict['gaussian'],
+                        gt_occ.reshape(*occ_shape),
+                        f'{frame_tag}',
+                        dataset=args.dataset,
                         **draw_gaussian_params)
 
                 # 每阶段 Gaussian
@@ -830,6 +948,10 @@ if __name__ == '__main__':
     parser.add_argument('--vis-gaussian-gt', action='store_true', default=False)
     parser.add_argument('--vis-occ-error', action='store_true', default=False,
                         help='可视化预测错误分类: 绿色(正确) / 深红(类别错) / 黑色(假阳性)')
+    parser.add_argument('--vis-gaussian-occ', action='store_true', default=False,
+                        help='同时可视化 Semantic Gaussian 和 GT Occupancy（GT 灰色背景）')
+    parser.add_argument('--vis-gaussian-match', action='store_true', default=False,
+                        help='可视化高斯球与GT Occupancy的几何匹配程度（仅展示包裹GT网格的高斯球，按语义匹配着色）')
     # 流式可视化参数
     parser.add_argument('--stream', action='store_true', default=False,
                         help='启用流式可视化模式 (使用 NuScenesFlowDataset)')
@@ -839,6 +961,9 @@ if __name__ == '__main__':
                         help='FIFO 队列长度（时序窗口大小）')
     parser.add_argument('--fusion-alpha', type=float, default=0.7,
                         help='时序融合权重 α: P_fused = P_curr * α + P_history * (1-α)')
+    # Gaussian FIFO 流式融合可视化
+    parser.add_argument('--stream-gaussian-fusion', action='store_true', default=False,
+                        help='启用基于 Semantic Gaussian 的 FIFO 流式融合可视化')
     args = parser.parse_args()
     
     ngpus = torch.cuda.device_count()
@@ -848,10 +973,11 @@ if __name__ == '__main__':
     # 自动模式选择：
     #   - 显式指定 --stream → main_stream
     #   - 未指定 --stream 但指定了 --fifo → 自动启用流式模式（因为 FIFO 依赖 NuScenesFlowDataset）
+    #   - 未指定 --stream 但指定了 --stream-gaussian-fusion → 自动启用流式模式
     #   - 其他情况 → 传统 eval 可视化 main
-    if args.stream or args.fifo:
+    if args.stream or args.fifo or args.stream_gaussian_fusion:
         if not args.stream:
-            print('[INFO] --fifo 已启用，自动切换到流式可视化模式 (--stream)')
+            print('[INFO] --fifo/--stream-gaussian-fusion 已启用，自动切换到流式可视化模式 (--stream)')
         args.stream = True
         entry_func = main_stream
     else:

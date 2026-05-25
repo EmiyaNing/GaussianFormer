@@ -46,7 +46,7 @@ def get_grid_coords(dims, resolution):
     g_zz = np.arange(0, dims[2]) # [0, 1, ..., 32]
 
     # Obtaining the grid with coords...
-    xx, yy, zz = np.meshgrid(g_xx, g_yy, g_zz)
+    xx, yy, zz = np.meshgrid(g_xx, g_yy, g_zz, indexing='ij')
     coords_grid = np.array([xx.flatten(), yy.flatten(), zz.flatten()]).T
     coords_grid = coords_grid.astype(np.float32)
     resolution = np.array(resolution, dtype=np.float32).reshape([1, 3])
