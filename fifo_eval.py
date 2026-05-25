@@ -17,6 +17,7 @@ import torch
 import torch.nn.functional as F
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
+from model.encoder.gaussian_encoder.utils import GaussianPrediction
 
 
 # ─── 子任务 1: FIFO 队列数据结构 ─────────────────────────────────
@@ -101,7 +102,7 @@ def build_chain_transform(fifo_queue, curr_lidar2prev):
     for item in reversed(fifo_queue.get_all()):
         chains.append(cumulative.clone())
         # 向更远的过去累积: cumulative = lidar2prev_{T-k} @ cumulative
-        cumulative = item.lidar2prev.float() @ cumulative
+        cumulative = item.lidar2prev.float().to(cumulative.device) @ cumulative
 
     # chains: [T_{T→T-1}, T_{T→T-2}, ..., T_{T→T-k}]
     return chains
@@ -215,9 +216,34 @@ def warp_occupancy(hist_soft_pred_grid, T_matrix, sampled_xyz_curr, grid_params)
 # ─── 子任务 4: 时序融合逻辑 ─────────────────────────────────
 
 
+def compute_nonempty_mask(soft_pred):
+    """计算非空体素掩码: argmax != 0 的位置为"非空".
+
+    第 0 类为背景/空类, 第 1~16 类为语义类别.
+
+    Args:
+        soft_pred: (C, *)  软预测 logits, 第 0 维为类别维度
+
+    Returns:
+        nonempty_mask: (*)  bool 张量, True 表示该体素预测为非空
+    """
+    pred_class = soft_pred.argmax(dim=0)   # (*)
+    return pred_class != 0                 # (*) bool
+
+
 def fuse_predictions(curr_soft_flat, fifo_queue, alpha,
-                     curr_lidar2prev, sampled_xyz_curr, grid_params):
-    """时序融合: 当前帧与历史帧 warped 预测的加权融合.
+                     curr_lidar2prev, sampled_xyz_curr, grid_params,
+                     mode='conditional'):
+    """时序融合: 当前帧与历史帧 warped 预测的融合.
+
+    支持两种模式:
+      - 'simple':      所有体素无差别加权平均 (旧逻辑)
+                        fused = curr * α + hist_mean * (1-α)
+      - 'conditional': 根据空/非空状态分三种情况融合 (新逻辑)
+                        情况 A: 当前空 + 历史非空 → 使用历史
+                        情况 B: 当前非空 + 历史空 → 使用当前
+                        情况 C: 当前非空 + 历史非空 → 加权融合
+                        情况 D: 当前空 + 历史空 → 使用当前 (均为背景)
 
     Args:
         curr_soft_flat:   (C, N)         当前帧软预测 (扁平格式)
@@ -226,6 +252,7 @@ def fuse_predictions(curr_soft_flat, fifo_queue, alpha,
         curr_lidar2prev:  (4, 4)         当前帧 lidar2prev
         sampled_xyz_curr: (N, 3)         当前帧体素中心坐标
         grid_params:      dict           网格参数 {H, W, D, pc_min, pc_max}
+        mode:             str            融合模式: 'simple' | 'conditional'
 
     Returns:
         fused_soft: (C, N)  融合后的软预测 (扁平格式)
@@ -256,8 +283,36 @@ def fuse_predictions(curr_soft_flat, fifo_queue, alpha,
     warped_stack = torch.stack(warped_flat_list, dim=0)  # (K, C, N)
     warped_mean = warped_stack.mean(dim=0)                # (C, N)
 
-    # 加权融合
-    fused = curr_soft_flat * alpha + warped_mean * (1.0 - alpha)  # (C, N)
+    if mode == 'simple':
+        # ── 旧逻辑: 所有体素无差别加权平均 ──
+        fused = curr_soft_flat * alpha + warped_mean * (1.0 - alpha)
+    elif mode == 'conditional':
+        # ── 新逻辑: 根据空/非空状态分情况融合 ──
+
+        # 计算空/非空掩码
+        curr_mask = compute_nonempty_mask(curr_soft_flat)  # (N,) bool
+        hist_mask = compute_nonempty_mask(warped_mean)     # (N,) bool
+
+        # 初始化 fused = curr (覆盖情况 B 和情况 D)
+        fused = curr_soft_flat.clone()
+
+        # 情况 A: 当前空, 历史非空 → 完全使用历史
+        mask_A = (~curr_mask) & hist_mask
+        if mask_A.any():
+            fused[:, mask_A] = warped_mean[:, mask_A]
+
+        # 情况 C: 当前非空, 历史非空 → 加权融合
+        mask_C = curr_mask & hist_mask
+        if mask_C.any():
+            fused[:, mask_C] = (
+                curr_soft_flat[:, mask_C] * alpha +
+                warped_mean[:, mask_C] * (1.0 - alpha)
+            )
+
+        # 情况 B: 当前非空 + 历史空 → fused 已 = curr, 无需操作
+        # 情况 D: 当前空 + 历史空 → fused 已 = curr (都是背景, 无差异)
+    else:
+        raise ValueError(f"Unknown fusion mode: '{mode}'. Expected 'simple' or 'conditional'.")
 
     return fused
 
@@ -288,3 +343,289 @@ def fused_soft_to_hard(fused_soft_flat):
         hard_label: (N,)   argmax 后的类别索引
     """
     return fused_soft_flat.argmax(dim=0)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Gaussian FIFO 流式融合模块 (gaussian_fifo_breakdown.md)
+# ═══════════════════════════════════════════════════════════════
+
+# ─── 子任务 5: GaussianFIFOQueue 数据结构 ──────────────────────
+
+
+@dataclass
+class GaussianFIFOQueueItem:
+    """Gaussian FIFO 队列元素
+
+    Attributes:
+        gaussian:    GaussianPrediction  历史帧语义高斯 (CPU 存储)
+        lidar2prev:  (4, 4)             该帧 → 前一帧的变换矩阵 (CPU)
+        frame_idx:   int                场景内帧索引
+        scene_token: str                所属场景 token
+    """
+    gaussian: GaussianPrediction
+    lidar2prev: torch.Tensor  # (4, 4)
+    frame_idx: int
+    scene_token: str
+
+
+class GaussianFIFOQueue:
+    """Gaussian FIFO 环形缓冲队列 (子任务 5)
+
+    存储历史帧的语义高斯 (GaussianPrediction)，
+    所有 Tensor 均 detach().cpu() 以节省 GPU 显存。
+    """
+
+    def __init__(self, maxlen: int):
+        self.maxlen = maxlen
+        self.buffer: List[GaussianFIFOQueueItem] = []
+
+    def push(self, gaussian, lidar2prev, frame_idx, scene_token):
+        """队尾追加; 超出 maxlen 则弹出最旧。
+
+        所有 Tensor 自动 detach 并移至 CPU。
+        """
+        item = GaussianFIFOQueueItem(
+            gaussian=GaussianPrediction(
+                means=gaussian.means.detach().cpu(),
+                scales=gaussian.scales.detach().cpu(),
+                rotations=gaussian.rotations.detach().cpu(),
+                opacities=gaussian.opacities.detach().cpu(),
+                semantics=gaussian.semantics.detach().cpu(),
+            ),
+            lidar2prev=lidar2prev.detach().cpu(),
+            frame_idx=frame_idx,
+            scene_token=scene_token,
+        )
+        if len(self.buffer) >= self.maxlen:
+            self.buffer.pop(0)
+        self.buffer.append(item)
+
+    def clear(self):
+        """清空队列 (场景切换时调用)"""
+        self.buffer = []
+
+    def is_empty(self) -> bool:
+        return len(self.buffer) == 0
+
+    def size(self) -> int:
+        return len(self.buffer)
+
+    def get_all(self) -> List[GaussianFIFOQueueItem]:
+        """返回所有元素 (从旧到新)"""
+        return self.buffer
+
+
+# ─── 子任务 1: 高斯坐标变换与越界过滤 ─────────────────────────
+
+
+def transform_and_filter_gaussians(hist_gaussian, T_curr2hist, pc_min, pc_max):
+    """将历史帧高斯变换到当前帧坐标系，并过滤越界高斯。
+
+    变换方向: pos_curr = inv(T_curr2hist) @ pos_hist
+    即对 build_chain_transform 输出的 T_{T→T-k} 求逆。
+
+    Args:
+        hist_gaussian:  GaussianPrediction  (1, G, *)  历史帧高斯
+        T_curr2hist:    Tensor (4, 4)       T_{T→T-k} 变换矩阵
+        pc_min:         Tensor (3,)         有效空间下界
+        pc_max:         Tensor (3,)         有效空间上界
+
+    Returns:
+        filtered: GaussianPrediction  (1, G', *)  过滤后的高斯, G' ≤ G
+    """
+    device = T_curr2hist.device
+
+    # Step 1: 求逆得到正向变换 T_{T-k→T}
+    T_hist2curr = torch.inverse(T_curr2hist.float())  # (4, 4)
+
+    # Step 2: 变换高斯 means
+    means_hist = hist_gaussian.means.to(device)
+    if means_hist.dim() == 3:
+        means_hist = means_hist.squeeze(0)  # (G, 3)
+
+    G = means_hist.shape[0]
+    if G == 0:
+        return _make_empty_gaussian(device, hist_gaussian)
+
+    ones = torch.ones(G, 1, device=device, dtype=means_hist.dtype)
+    means_homo = torch.cat([means_hist, ones], dim=-1)          # (G, 4)
+    means_transformed = (T_hist2curr @ means_homo.T).T          # (G, 4)
+    means_transformed = means_transformed[..., :3]               # (G, 3)
+
+    # Step 3: 边界检查
+    pc_min_dev = pc_min.to(device)
+    pc_max_dev = pc_max.to(device)
+    valid_mask = (means_transformed >= pc_min_dev) & (means_transformed <= pc_max_dev)
+    valid_mask = valid_mask.all(dim=-1)  # (G,) bool
+
+    if not valid_mask.any():
+        return _make_empty_gaussian(device, hist_gaussian)
+
+    # Step 4: 过滤所有属性（means 使用变换后的坐标）
+    scales = hist_gaussian.scales.to(device)
+    rotations = hist_gaussian.rotations.to(device)
+    opacities = hist_gaussian.opacities.to(device)
+    semantics = hist_gaussian.semantics.to(device)
+
+    return GaussianPrediction(
+        means=means_transformed[valid_mask].unsqueeze(0),              # (1, G', 3)
+        scales=_index_dim1(scales, valid_mask),                        # (1, G', 3)
+        rotations=_index_dim1(rotations, valid_mask),                  # (1, G', 4)
+        opacities=_index_dim1(opacities, valid_mask),                  # (1, G', 1)
+        semantics=_index_dim1(semantics, valid_mask),                  # (1, G', C)
+    )
+
+
+def _index_dim1(tensor, mask):
+    """沿 dim=1 按 bool mask 索引，兼容 3D 和 2D tensor。"""
+    if tensor.dim() == 3:
+        return tensor[:, mask, :]
+    else:
+        return tensor[mask].unsqueeze(0)
+
+
+def _make_empty_gaussian(device, ref_gaussian):
+    """创建一个 G=0 的空 GaussianPrediction。"""
+    C = ref_gaussian.semantics.shape[-1]
+    return GaussianPrediction(
+        means=torch.zeros(1, 0, 3, device=device),
+        scales=torch.zeros(1, 0, 3, device=device),
+        rotations=torch.zeros(1, 0, 4, device=device),
+        opacities=torch.zeros(1, 0, 1, device=device),
+        semantics=torch.zeros(1, 0, C, device=device),
+    )
+
+
+# ─── 子任务 2: 多帧高斯叠加与合并 ─────────────────────────────
+
+
+def merge_gaussians(curr_gaussian, hist_gaussians_list):
+    """将当前帧高斯与多个历史帧高斯沿 G 维度拼接。
+
+    Args:
+        curr_gaussian:       GaussianPrediction  (1, G_curr, *)
+        hist_gaussians_list: list[GaussianPrediction]  每个 (1, G_i', *)
+
+    Returns:
+        merged: GaussianPrediction  (1, G_total, *)  G_total = G_curr + Σ G_i'
+    """
+    # 收集所有要合并的高斯（跳过 G=0 的空高斯）
+    all_gaussians = [curr_gaussian]
+    for hg in hist_gaussians_list:
+        if hg.means.shape[1] > 0:  # G_i' > 0
+            all_gaussians.append(hg)
+
+    if len(all_gaussians) == 1:
+        return curr_gaussian
+
+    # 沿 G 维度 (dim=1) 拼接所有属性
+    merged = GaussianPrediction(
+        means=torch.cat([g.means for g in all_gaussians], dim=1),
+        scales=torch.cat([g.scales for g in all_gaussians], dim=1),
+        rotations=torch.cat([g.rotations for g in all_gaussians], dim=1),
+        opacities=torch.cat([g.opacities for g in all_gaussians], dim=1),
+        semantics=torch.cat([g.semantics for g in all_gaussians], dim=1),
+    )
+    return merged
+
+
+# ─── 子任务 3: 合并高斯渲染为 Occupancy ────────────────────────
+
+
+def render_gaussian_to_occupancy(merged_gaussian, sampled_xyz, head):
+    """将合并后的高斯渲染为 occupancy 硬标签。
+
+    调用 head.prepare_gaussian_args() 准备参数，
+    再调用 head.aggregator() 进行 CUDA 渲染，
+    最后 argmax 得到硬标签。
+
+    Args:
+        merged_gaussian: GaussianPrediction  (1, G_total, *)
+        sampled_xyz:     Tensor              (1, N, 3)  查询点坐标
+        head:            GaussianHead        模型 head (已包含 aggregator)
+
+    Returns:
+        hard_pred: Tensor (N,)  argmax 后的类别索引
+    """
+    # Step 1: 准备高斯渲染参数
+    # prepare_gaussian_args 处理 with_empty / use_localaggprob 等逻辑
+    means, origi_opa, opacities, scales, CovInv = \
+        head.prepare_gaussian_args(merged_gaussian)
+
+    # Step 2: CUDA 渲染
+    bs, g = means.shape[:2]
+    logits = head.aggregator(
+        sampled_xyz.clone().float(),   # (1, N, 3)
+        means,                          # (1, G_total+empty, 3)
+        origi_opa.reshape(bs, g),       # (1, G_total+empty)
+        opacities,                      # (1, G_total+empty, C)
+        scales,                         # (1, G_total+empty, 3)
+        CovInv,                         # (1, G_total+empty, 3, 3)
+    )
+    # logits: (N, C)  — local_aggregate 模式返回单个 Tensor
+
+    # Step 3: argmax 得到硬标签 (参考 gaussian_head.py:186)
+    hard_pred = logits.argmax(dim=-1)   # (N,)
+
+    return hard_pred
+
+
+# ─── 子任务 4: Gaussian FIFO 融合主入口 ───────────────────────
+
+
+def gaussian_fifo_fuse_and_render(curr_gaussian, fifo_queue, curr_lidar2prev,
+                                   sampled_xyz, head, grid_params):
+    """Gaussian FIFO 融合主函数: 变换 + 合并 + 渲染。
+
+    流程:
+      1. 队列空 → 直接渲染当前帧高斯
+      2. build_chain_transform() 构建 T_{T→T-k} 链
+      3. 对每个历史帧: transform_and_filter_gaussians()
+      4. merge_gaussians() 沿 G 维拼接
+      5. render_gaussian_to_occupancy() 渲染为硬标签
+
+    Args:
+        curr_gaussian:    GaussianPrediction  (1, G_curr, *)
+        fifo_queue:       GaussianFIFOQueue
+        curr_lidar2prev:  Tensor (4, 4)       当前帧 lidar2prev
+        sampled_xyz:      Tensor (1, N, 3)    查询点坐标
+        head:             GaussianHead
+        grid_params:      dict  {pc_min, pc_max, H, W, D}
+
+    Returns:
+        hard_pred:       Tensor (N,)          融合后的硬标签
+        merged_gaussian: GaussianPrediction   融合后的语义高斯 (用于可视化)
+    """
+    # 队列为空 → 直接渲染当前帧
+    if fifo_queue.is_empty():
+        return render_gaussian_to_occupancy(curr_gaussian, sampled_xyz, head), curr_gaussian
+
+    # 构建变换链 (复用现有函数，通过 duck-typing 兼容 GaussianFIFOQueue)
+    chains = build_chain_transform(fifo_queue, curr_lidar2prev)
+    # chains[i] = T_{T→T-i-1}
+
+    # 对每个历史帧: 移至 GPU → 变换 → 过滤
+    hist_filtered = []
+    items = fifo_queue.get_all()
+    pc_min = grid_params['pc_min']
+    pc_max = grid_params['pc_max']
+
+    for item, T_curr2hist in zip(items, chains):
+        # 将 CPU 上的历史高斯移至 GPU
+        hist_g = GaussianPrediction(
+            means=item.gaussian.means.cuda(),
+            scales=item.gaussian.scales.cuda(),
+            rotations=item.gaussian.rotations.cuda(),
+            opacities=item.gaussian.opacities.cuda(),
+            semantics=item.gaussian.semantics.cuda(),
+        )
+        filtered = transform_and_filter_gaussians(
+            hist_g, T_curr2hist, pc_min, pc_max
+        )
+        hist_filtered.append(filtered)
+
+    # 合并当前帧与所有历史帧高斯
+    merged = merge_gaussians(curr_gaussian, hist_filtered)
+
+    # 渲染为 occupancy + 返回 merged gaussian 供可视化
+    return render_gaussian_to_occupancy(merged, sampled_xyz, head), merged
