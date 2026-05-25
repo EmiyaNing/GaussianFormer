@@ -27,6 +27,7 @@ optimizer = dict(
         type="AdamW", lr=2e-4, weight_decay=0.01,
     ),
     paramwise_cfg=dict(
+        bypass_duplicate=True,
         custom_keys={
             'img_backbone': dict(lr_mult=0.1)}
     )
@@ -70,11 +71,13 @@ num_decoder = 2
 num_single_frame_decoder = 1
 num_densify_frame_decoder= 1
 pc_range = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
-scale_range = [0.08, 1.4]
+scale_range = [0.08, 0.64]
 xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
 include_opa = True
-load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
+# ConvNeXt 预训练权重通过 img_backbone.load_path 加载，不需要全局 load_from
+# load_from 用于整个模型的 checkpoint，这里设为 None 避免重复加载和 key 不匹配
+img_backbone_path = 'ckpts/dinov3_convnext_small_pretrain_lvd1689m-296db49d.pth'
 semantics = True
 semantic_dim = 17
 
@@ -82,19 +85,18 @@ model = dict(
     img_backbone_out_indices=[0, 1, 2, 3],
     img_backbone=dict(
         _delete_=True,
-        type='ResNet',
-        depth=50,
-        num_stages=4,
-        out_indices=(0, 1, 2, 3),
-        frozen_stages=1,
-        norm_cfg=dict(type='BN2d', requires_grad=False),
-        norm_eval=True,
-        style='caffe',
-        with_cp = True,),
-        #dcn=dict(type='DCNv2', deform_groups=1, fallback_on_stride=False), # original DCNv2 will print log when perform load_state_dict
-        #stage_with_dcn=(False, False, True, True)),
+        type='ConvNeXt',
+        load_path=img_backbone_path,
+        freezon_stage_id=2),
     img_neck=dict(
-        start_level=1),
+        type="FPN",
+        num_outs=4,
+        start_level=1,
+        out_channels=embed_dims,
+        add_extra_convs="on_output",
+        relu_before_extra_convs=True,
+        in_channels=[96, 192, 384, 768],
+    ),
     lifter=dict(
         type='GaussianVoxelLearnear',
         num_anchor=25600,
@@ -149,14 +151,13 @@ model = dict(
             semantics_activation='softplus',
         ),
         densify_layer=dict(
-            type='DensifyOnly',
+            type='TopkDensifyModule',
             feat_embed_dim = 128,
             semantic_dim = 17,
             topk_count = 2560,
             pc_range = pc_range,
             scale_range = scale_range,
             unit_xyz=[4.0, 4.0, 1.0],
-            K=27,
         ),
         spconv_layer=dict(
             _delete_=True,

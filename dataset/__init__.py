@@ -4,6 +4,7 @@ OPENOCC_DATAWRAPPER = Registry('openocc_datawrapper')
 OPENOCC_TRANSFORMS = Registry('openocc_transforms')
 
 from .dataset import NuScenesDataset
+from .dataset_flow import NuScenesFlowDataset, SceneStream
 from .transform_3d import *
 from .sampler import CustomDistributedSampler
 from .utils import custom_collate_fn_temporal
@@ -77,3 +78,60 @@ def get_dataloader(
         pin_memory=True)
 
     return train_dataset_loader, val_dataset_loader
+
+
+def get_stream_dataloader(
+    dataset_config,
+    loader_config,
+    dist=False,
+    shuffle_scenes=False,
+    sampler_config=None,
+):
+    """创建流式 DataLoader。
+
+    与 get_dataloader 不同的是，流式 DataLoader 保证：
+    1. 同一场景的帧按时间顺序连续返回
+    2. 提供场景切换信号
+    3. 支持场景级 shuffle（场景顺序打乱，但场景内保持时序）
+
+    Args:
+        dataset_config: 数据集配置
+        loader_config: DataLoader 配置（batch_size, num_workers 等）
+        dist: 是否使用分布式
+        shuffle_scenes: 是否在场景级别打乱顺序
+        sampler_config: 采样器配置
+    """
+    dataset = OPENOCC_DATASET.build(dataset_config)
+    assert isinstance(dataset, NuScenesFlowDataset), \
+        "流式 DataLoader 需要 NuScenesFlowDataset 类型"
+
+    # 创建场景流迭代器
+    stream = SceneStream(
+        dataset,
+        shuffle_scenes=shuffle_scenes,
+        shuffle_frames=False,
+    )
+
+    # 单帧模式：使用 custom_collate_fn_temporal
+    collate_fn = custom_collate_fn_temporal
+
+    # 分布式采样器
+    sampler = None
+    if dist:
+        from .sampler import SceneStreamSampler
+        sampler = SceneStreamSampler(
+            dataset, stream,
+            **(sampler_config or {})
+        )
+
+    dataloader = DataLoader(
+        dataset=dataset,
+        batch_size=loader_config.get("batch_size", 1),
+        collate_fn=collate_fn,
+        shuffle=False,
+        sampler=sampler,
+        num_workers=loader_config.get("num_workers", 4),
+        pin_memory=True,
+    )
+
+    return dataloader

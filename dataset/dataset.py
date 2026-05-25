@@ -23,7 +23,6 @@ class NuScenesDataset(Dataset):
         vis_indices=None,
         pc_range=[-50.0, -50.0, -5.0, 50.0, 50.0, 3.0],
         occ3d=False,
-        num_samples=0,
         vis_scene_index=-1,
         phase='train',
         return_keys=[
@@ -69,12 +68,6 @@ class NuScenesDataset(Dataset):
             if len(vis_indices) > 0:
                 vis_indices = [i % len(self.keyframes) for i in vis_indices]
                 self.keyframes = [self.keyframes[idx] for idx in vis_indices]
-            elif num_samples > 0:
-                vis_indices = np.random.choice(len(self.keyframes), num_samples, False)
-                self.keyframes = [self.keyframes[idx] for idx in vis_indices]
-        elif num_samples > 0:
-            vis_indices = np.random.choice(len(self.keyframes), num_samples, False)
-            self.keyframes = [self.keyframes[idx] for idx in vis_indices]
 
     def _sample_augmentation(self):
         H, W = self.data_aug_conf["H"], self.data_aug_conf["W"]
@@ -141,12 +134,7 @@ class NuScenesDataset(Dataset):
         ego2global = np.eye(4)
         ego2global[:3, :3] = Quaternion(info['data']['LIDAR_TOP']['pose']['rotation']).rotation_matrix
         ego2global[:3, 3] = np.asarray(info['data']['LIDAR_TOP']['pose']['translation']).T
-        lidar_history = self.collect_lidar_history(info, scene_token=scene_token, frame_index=frame_index)
-        lidar_points = self.load_lidar_points_with_history(
-            info['data']['LIDAR_TOP']['filename'],
-            lidar2global,
-            lidar_history,
-        )
+        lidar_points = self.load_lidar_points(info['data']['LIDAR_TOP']['filename'])
         if self.occ3d:
             lidar_reflect = lidar_points[:, 2:3]
             lidar_points[:, 3] = 1.0
@@ -195,7 +183,6 @@ class NuScenesDataset(Dataset):
             lidar_points=lidar_points,  # [N, 4] 点云数据 (x, y, z, intensity)
             lidar_pose=lidar2global,    # LiDAR到全局坐标系的变换矩阵
             ego_pose=ego2global,        # Ego到全局坐标系的变换矩阵
-            lidar_sweeps=lidar_history,
         )
 
         if self.num_img_history > 0 and scene_token is not None and frame_index is not None:

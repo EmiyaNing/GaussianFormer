@@ -9,6 +9,8 @@ from copy import deepcopy
 
 from . import OPENOCC_TRANSFORMS
 from .utils import get_img2global
+from .utils import get_lidar2global
+from .loading_utils import load_augmented_point_cloud, reduce_LiDAR_beams
 
 
 @OPENOCC_TRANSFORMS.register_module()
