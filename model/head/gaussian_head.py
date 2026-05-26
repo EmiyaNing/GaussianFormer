@@ -20,6 +20,7 @@ class GaussianHead(BaseTaskHead):
         empty_label=17,
         use_localaggprob=False,
         use_localaggprob_fast=False,
+        use_localagg_react=False,
         combine_geosem=False,
         **kwargs,
     ):
@@ -27,7 +28,11 @@ class GaussianHead(BaseTaskHead):
         
         self.num_classes = num_classes
         self.use_localaggprob = use_localaggprob
-        if use_localaggprob:
+        self.use_localagg_react = use_localagg_react
+        if use_localagg_react:
+            import local_aggregate_react
+            self.aggregator = local_aggregate_react.LocalAggregator(**cuda_kwargs)
+        elif use_localaggprob:
             if use_localaggprob_fast:
                 import local_aggregate_prob_fast
                 self.aggregator = local_aggregate_prob_fast.LocalAggregator(**cuda_kwargs)

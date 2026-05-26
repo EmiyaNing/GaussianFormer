@@ -134,7 +134,12 @@ class NuScenesDataset(Dataset):
         ego2global = np.eye(4)
         ego2global[:3, :3] = Quaternion(info['data']['LIDAR_TOP']['pose']['rotation']).rotation_matrix
         ego2global[:3, 3] = np.asarray(info['data']['LIDAR_TOP']['pose']['translation']).T
-        lidar_points = self.load_lidar_points(info['data']['LIDAR_TOP']['filename'])
+        lidar_history = self.collect_lidar_history(info, scene_token=scene_token, frame_index=frame_index)
+        lidar_points = self.load_lidar_points_with_history(
+            info['data']['LIDAR_TOP']['filename'],
+            lidar2global,
+            lidar_history,
+        )
         if self.occ3d:
             lidar_reflect = lidar_points[:, 2:3]
             lidar_points[:, 3] = 1.0
