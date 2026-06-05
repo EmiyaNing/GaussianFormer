@@ -44,13 +44,21 @@ class BEVSegmentor(CustomBaseSegmentor):
 
         B, N, C, H, W = imgs.size()
         imgs = imgs.reshape(B * N, C, H, W)
-        img_feats_backbone = self.img_backbone(imgs)
+        if self.freeze_img_backbone:
+            with torch.no_grad():
+                img_feats_backbone = self.img_backbone(imgs)
+        else:
+            img_feats_backbone = self.img_backbone(imgs)
         if isinstance(img_feats_backbone, dict):
             img_feats_backbone = list(img_feats_backbone.values())
         img_feats = []
         for idx in self.img_backbone_out_indices:
             img_feats.append(img_feats_backbone[idx])
-        img_feats = self.img_neck(img_feats)
+        if self.freeze_img_neck:
+            with torch.no_grad():
+                img_feats = self.img_neck(img_feats)
+        else:
+            img_feats = self.img_neck(img_feats)
         if isinstance(img_feats, dict):
             secondfpn_out = img_feats["secondfpn_out"][0]
             BN, C, H, W = secondfpn_out.shape

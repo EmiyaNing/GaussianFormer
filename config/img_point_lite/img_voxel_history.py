@@ -30,7 +30,6 @@ img_norm_cfg = dict(
 
 train_pipeline = [
     dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadMultiViewImageHistory", num_history=3),
     dict(type="LoadOccupancySurroundOcc", occ_path=occ_path, semantic=True, use_ego=False),
     dict(type="ResizeCropFlipImage"),
     dict(type="PhotoMetricDistortionMultiViewImage"),
@@ -41,7 +40,6 @@ train_pipeline = [
 
 test_pipeline = [
     dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadMultiViewImageHistory", num_history=3),
     dict(type="LoadOccupancySurroundOcc", occ_path=occ_path, semantic=True, use_ego=False),
     dict(type="ResizeCropFlipImage"),
     dict(type="NormalizeMultiviewImage", **img_norm_cfg),
@@ -55,7 +53,7 @@ train_dataset_config = dict(
     imageset=anno_root + "nuscenes_infos_train_sweeps_occ.pkl",
     data_aug_conf=data_aug_conf,
     pipeline=train_pipeline,
-    num_lidar_history=3,
+    num_lidar_history=9,
     phase='train'
 )
 
@@ -65,7 +63,7 @@ val_dataset_config = dict(
     imageset=anno_root + "nuscenes_infos_val_sweeps_occ.pkl",
     data_aug_conf=data_aug_conf,
     pipeline=test_pipeline,
-    num_lidar_history=3,
+    num_lidar_history=9,
     phase='val'
 )
 
@@ -122,8 +120,8 @@ scale_range = [0.08, 0.64]
 xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
 include_opa = True
-load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
-#load_from = 'ckpts/img_voxel_lite_28_4.pth'
+#load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
+load_from = 'ckpts/img_voxel_history_33_3.pth'
 semantics = True
 semantic_dim = 17
 
@@ -253,7 +251,6 @@ model = dict(
             "deformable",
             "ffn",
             "norm",
-            "history",
             "refine",
             "densify",
         ],

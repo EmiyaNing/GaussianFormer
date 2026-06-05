@@ -19,7 +19,6 @@ class NuScenesDataset(Dataset):
         data_aug_conf=None,
         pipeline=None,
         num_lidar_history=0,
-        num_img_history=0,
         vis_indices=None,
         pc_range=[-50.0, -50.0, -5.0, 50.0, 50.0, 3.0],
         occ3d=False,
@@ -49,7 +48,6 @@ class NuScenesDataset(Dataset):
         self.data_aug_conf = data_aug_conf
         self.pc_range  = pc_range
         self.num_lidar_history = num_lidar_history
-        self.num_img_history = num_img_history
         self.test_mode = (phase != 'train')
         self.occ3d = occ3d
         self.pipeline = []
@@ -190,7 +188,7 @@ class NuScenesDataset(Dataset):
             ego_pose=ego2global,        # Ego到全局坐标系的变换矩阵
         )
 
-        if self.num_img_history > 0 and scene_token is not None and frame_index is not None:
+        if scene_token is not None and frame_index is not None:
             input_dict['history_context'] = dict(
                 scene_infos=self.scene_infos,
                 scene_token=scene_token,

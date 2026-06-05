@@ -158,7 +158,8 @@ class DeformableFeatureAggregation(BaseModule):
             feature_queue
         ) = meta_queue = temp_anchor_embeds = []
         if self.use_deformable_func:
-            feature_maps = DAF.feature_maps_format(feature_maps)
+            feature_maps_clip = [fm[:, :self.num_cams].clone() for fm in feature_maps]
+            feature_maps_clip = DAF.feature_maps_format(feature_maps_clip)
 
         for (
             temp_feature_maps,
@@ -166,7 +167,7 @@ class DeformableFeatureAggregation(BaseModule):
             temp_key_points,
             temp_anchor_embed,
         ) in zip(
-            feature_queue[::-1] + [feature_maps],
+            feature_queue[::-1] + [feature_maps_clip],
             meta_queue[::-1] + [metas],
             temp_key_points_list[::-1] + [key_points],
             temp_anchor_embeds[::-1] + [anchor_embed],
@@ -199,10 +200,11 @@ class DeformableFeatureAggregation(BaseModule):
                         self.num_groups,
                     )
                 )
+                image_wh = temp_metas.get("image_wh")
                 points_2d, mask = self.project_points(
                     temp_key_points,
-                    temp_metas["projection_mat"],
-                    temp_metas.get("image_wh"),
+                    temp_metas["projection_mat"][:, :self.num_cams],
+                    image_wh[:, :self.num_cams] if image_wh is not None else None,
                 )
                 points_2d = points_2d.permute(0, 2, 3, 1, 4).reshape(
                     bs, num_anchor * self.num_pts, self.num_cams, 2)
@@ -252,7 +254,7 @@ class DeformableFeatureAggregation(BaseModule):
         feature = instance_feature + anchor_embed
         if self.camera_encoder is not None:
             camera_embed = self.camera_encoder(
-                metas["projection_mat"][:, :, :3].reshape(
+                metas["projection_mat"][:, :self.num_cams, :3].reshape(
                     bs, self.num_cams, -1
                 )
             )

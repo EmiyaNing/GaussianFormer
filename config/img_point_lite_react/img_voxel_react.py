@@ -15,60 +15,12 @@ data_aug_conf = {
     "W": 1600,
     "rand_flip": True,
 }
-
-data_root = "data/nuscenes/"
-anno_root = "data/nuscenes_cam/"
-occ_path = "data/surroundocc/samples"
-input_shape = (704, 256)
-batch_size = 1
-# dataset label
-dataset_name_flag = 'surroundocc'
-
-img_norm_cfg = dict(
-    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True
-)
-
-train_pipeline = [
-    dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadMultiViewImageHistory", num_history=3),
-    dict(type="LoadOccupancySurroundOcc", occ_path=occ_path, semantic=True, use_ego=False),
-    dict(type="ResizeCropFlipImage"),
-    dict(type="PhotoMetricDistortionMultiViewImage"),
-    dict(type="NormalizeMultiviewImage", **img_norm_cfg),
-    dict(type="DefaultFormatBundle"),
-    dict(type="NuScenesAdaptor", use_ego=False, num_cams=6),
-]
-
-test_pipeline = [
-    dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadMultiViewImageHistory", num_history=3),
-    dict(type="LoadOccupancySurroundOcc", occ_path=occ_path, semantic=True, use_ego=False),
-    dict(type="ResizeCropFlipImage"),
-    dict(type="NormalizeMultiviewImage", **img_norm_cfg),
-    dict(type="DefaultFormatBundle"),
-    dict(type="NuScenesAdaptor", use_ego=False, num_cams=6),
-]
-
-train_dataset_config = dict(
-    type='NuScenesDataset',
-    data_root=data_root,
-    imageset=anno_root + "nuscenes_infos_train_sweeps_occ.pkl",
-    data_aug_conf=data_aug_conf,
-    pipeline=train_pipeline,
-    num_lidar_history=3,
-    phase='train'
-)
-
 val_dataset_config = dict(
-    type='NuScenesDataset',
-    data_root=data_root,
-    imageset=anno_root + "nuscenes_infos_val_sweeps_occ.pkl",
-    data_aug_conf=data_aug_conf,
-    pipeline=test_pipeline,
-    num_lidar_history=3,
-    phase='val'
+    data_aug_conf=data_aug_conf
 )
-
+train_dataset_config = dict(
+    data_aug_conf=data_aug_conf
+)
 # =========== misc config ==============
 optimizer = dict(
     optimizer = dict(
@@ -123,12 +75,10 @@ xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
 include_opa = True
 load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
-#load_from = 'ckpts/img_voxel_lite_28_4.pth'
 semantics = True
 semantic_dim = 17
 
 model = dict(
-    #freeze_img_backbone=True,
     img_backbone_out_indices=[0, 1, 2, 3],
     img_backbone=dict(
         _delete_=True,
@@ -136,7 +86,7 @@ model = dict(
         depth=50,
         num_stages=4,
         out_indices=(0, 1, 2, 3),
-        frozen_stages=2,
+        frozen_stages=1,
         norm_cfg=dict(type='BN2d', requires_grad=False),
         norm_eval=True,
         style='caffe',
@@ -216,30 +166,6 @@ model = dict(
             xyz_coordinate=xyz_coordinate,
             use_out_proj=True,
         ),
-        history_attn=dict(
-            type='HistoryCrossAttention',
-            embed_dims=embed_dims,
-            kps_generator=dict(
-                type="SparseGaussian3DKeyPointsGenerator",
-                embed_dims=embed_dims,
-                phi_activation=phi_activation,
-                xyz_coordinate=xyz_coordinate,
-                num_learnable_pts=2,
-                fix_scale=[
-                    [0, 0, 0],
-                    [0.45, 0, 0],
-                    [-0.45, 0, 0],
-                    [0, 0.45, 0],
-                    [0, -0.45, 0],
-                    [0, 0, 0.45],
-                    [0, 0, -0.45],
-                ],
-                pc_range=pc_range,
-                scale_range=scale_range
-            ),
-            num_groups=8,
-            use_camera_embed=True,
-        ),
         num_decoder=num_decoder,
         num_single_frame_decoder=num_single_frame_decoder,
         operation_order=[
@@ -253,7 +179,6 @@ model = dict(
             "deformable",
             "ffn",
             "norm",
-            "history",
             "refine",
             "densify",
         ],
@@ -267,6 +192,7 @@ model = dict(
             mean=[0, 0, -1.0],
             scale=[100, 100, 8.0],
         ),
+        use_localagg_react=True,
         with_empty=True,
         cuda_kwargs=dict(
             _delete_=True,

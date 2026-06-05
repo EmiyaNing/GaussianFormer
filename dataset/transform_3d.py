@@ -832,3 +832,122 @@ class LoadOccupancyKITTI360(object):
         """str: Return a string that describes the module."""
         repr_str = self.__class__.__name__
         return repr_str
+
+
+@OPENOCC_TRANSFORMS.register_module()
+class EntropyBasedHistoryFrameLoader(object):
+    """基于熵增益的自适应历史帧加载器。
+
+    在 Pipeline 中替代 LoadMultiViewImageHistory，根据融合历史帧后
+    复合场景熵增益动态选择实际使用的历史帧数量。
+
+    - 图像输出键与 LoadMultiViewImageHistory 完全一致
+      (img, lidar2img, ego2img, num_current_img, num_history_frame, img_shape)
+    - 点云替换 results['lidar_points']
+
+    Args:
+        max_window:             最大历史帧融合窗口
+        min_window:             最小历史帧融合窗口
+        entropy_gain_threshold: 熵增益阈值，低于此值时停止融合
+        data_root:              NuScenes 数据根目录
+        pc_range:               点云范围 [x_min, y_min, z_min, x_max, y_max, z_max]
+        num_cams:               相机数量，默认 6
+        to_float32:             图像是否转 float32，默认 True
+    """
+
+    def __init__(self, max_window, min_window, entropy_gain_threshold,
+                 data_root, pc_range, num_cams=6, to_float32=True):
+        self.max_window = max_window
+        self.min_window = min_window
+        self.entropy_gain_threshold = entropy_gain_threshold
+        self.data_root = data_root
+        self.pc_range = pc_range
+        self.num_cams = num_cams
+        self.to_float32 = to_float32
+        from dataset.entropy_history_loader import EntropyBasedHistoryLoader
+
+        self.engine = EntropyBasedHistoryLoader(
+            max_window=self.max_window,
+            min_window=self.min_window,
+            entropy_gain_threshold=self.entropy_gain_threshold,
+            data_root=self.data_root,
+            pc_range=self.pc_range,
+        )
+
+    def __call__(self, results):
+        # ---- Step 0: 前置格式转换（与 LoadMultiViewImageHistory 一致） ----
+        if isinstance(results.get('lidar2img'), np.ndarray):
+            results['lidar2img'] = list(results['lidar2img'])
+        if isinstance(results.get('ego2img'), np.ndarray):
+            results['ego2img'] = list(results['ego2img'])
+
+        # ---- Step 1: 前置检查 ----
+        ctx = results.get('history_context', None)
+        if ctx is None:
+            results['num_current_img'] = self.num_cams
+            results['num_history_frame'] = 0
+            results['img_shape'] = [x.shape[:2] for x in results['img']]
+            return results
+
+        # ---- Step 2: 提取场景元数据 ----
+        scene_infos = ctx['scene_infos']
+        scene_token = ctx['scene_token']
+        frame_index = ctx['frame_index']
+
+        # ---- Step 3: 调用熵增益核心引擎 ----
+        
+        selected_frames, gain_values = self.engine.forward(
+            scene_infos, scene_token, frame_index
+        )
+
+        # ---- Step 4: 加载选中历史帧图像（与 LoadMultiViewImageHistory 一致） ----
+        sensor_types = [
+            'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
+            'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT',
+        ]
+
+        num_history_frame = 0
+        for frame in selected_frames:
+            for cam_type in sensor_types:
+                img_path = frame['img_files'][cam_type]
+                img = mmcv.imread(img_path)
+                if self.to_float32:
+                    img = img.astype(np.float32)
+
+                results['img'].append(img)
+                results['lidar2img'].append(frame['lidar2img'][cam_type])
+                results['ego2img'].append(frame['ego2img'][cam_type])
+            num_history_frame += 1
+
+        # ---- Step 5: 替换 lidar_points 为熵筛选后的融合点云 ----
+        current_only = self._load_lidar_points(results['pts_filename'])
+        if num_history_frame > 0:
+            fused = [current_only]
+            for frame in selected_frames:
+                fused.append(frame['points'])
+            results['lidar_points'] = np.concatenate(fused, axis=0)
+        else:
+            results['lidar_points'] = current_only
+
+        # ---- Step 6: 记录元信息（与 LoadMultiViewImageHistory 一致的键） ----
+        results['num_current_img'] = self.num_cams
+        results['num_history_frame'] = num_history_frame
+        results['img_shape'] = [x.shape[:2] for x in results['img']]
+
+        return results
+
+    def _load_lidar_points(self, lidar_filename):
+        """加载单帧LiDAR点云，返回 (N, 4) — x, y, z, intensity"""
+        lidar_path = (
+            lidar_filename if os.path.isabs(lidar_filename)
+            else os.path.join(self.data_root, lidar_filename)
+        )
+        points = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)
+        return points[:, :4]
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(max_window={self.max_window}, '
+        repr_str += f'min_window={self.min_window}, '
+        repr_str += f'entropy_gain_threshold={self.entropy_gain_threshold})'
+        return repr_str

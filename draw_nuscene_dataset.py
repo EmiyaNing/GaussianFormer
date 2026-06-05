@@ -65,6 +65,44 @@ def collect_lidar_history_from_infos(infos, scene_token, frame_index, num_histor
     return history
 
 
+def collect_lidar_history_from_frames(frames, frame_index, num_history=5):
+    """
+    从帧列表中收集历史帧 LiDAR 信息（多进程友好版本）。
+
+    与 collect_lidar_history_from_infos() 功能相同，但直接接收该场景的
+    frames 列表而非整个 infos 字典，避免跨进程访问全局 infos。
+
+    Args:
+        frames:       该场景的完整帧列表 list[dict]
+        frame_index:  当前帧在列表中的索引
+        num_history:  最大历史帧数
+
+    Returns:
+        list[dict]: 每个元素为 dict(pts_filename=..., lidar_pose=...)
+    """
+    if num_history <= 0:
+        return []
+
+    history = []
+    for prev_idx in range(frame_index - 1, -1, -1):
+        prev_frame = frames[prev_idx]
+        prev_lidar_info = prev_frame.get('data', {}).get('LIDAR_TOP')
+        if prev_lidar_info is None:
+            continue
+
+        history.append(dict(
+            pts_filename=prev_lidar_info['filename'],
+            lidar_pose=get_lidar2global(
+                prev_lidar_info['calib'],
+                prev_lidar_info['pose'],
+            ),
+        ))
+        if len(history) >= num_history:
+            break
+
+    return history
+
+
 def transform_points_to_target(points, source_pose, target_pose):
     """
     将点云从source_pose坐标系变换到target_pose坐标系。
@@ -469,6 +507,8 @@ def main():
                         help='可视化的历史帧数量')
     parser.add_argument('--data_root', default='./data/nuscenes',
                         help='nuscenes原始数据根目录')
+    parser.add_argument('--scene_token', type=str, default=None,
+                        help='指定要可视化的单个场景token。若不指定则遍历所有场景。')
 
     
     # --- 新增: 可视化控制参数 ---
@@ -490,8 +530,20 @@ def main():
 
     infos = load_pkl(args.pkl_path)
 
+    # --- 按 scene_token 过滤 ---
+    if args.scene_token is not None:
+        if args.scene_token not in infos:
+            available = '\n'.join(f'  {t}' for t in list(infos.keys())[:20])
+            raise ValueError(
+                f"指定的 scene_token 不存在: {args.scene_token}\n"
+                f"pkl 中可用的 scene_token (前20个):\n{available}"
+            )
+        scenes_to_process = {args.scene_token: infos[args.scene_token]}
+        print(f"仅可视化指定场景: {args.scene_token}")
+    else:
+        scenes_to_process = infos
 
-    for scene_token, frames in tqdm(infos.items()):
+    for scene_token, frames in tqdm(scenes_to_process.items()):
         # [新增] 场景级熵统计累加器
         scene_entropy_sum = 0.0
         scene_entropy_with_history_sum = 0.0

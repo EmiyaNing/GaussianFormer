@@ -128,15 +128,18 @@ class EntropyBasedHistoryLoader:
     # ------------------------------------------------------------------
 
     def forward(self, scene_infos, scene_token, frame_index):
-        """主入口：根据熵增益选择历史帧，返回选中帧的元信息列表。
+        """主入口：根据熵增益选择历史帧，返回选中帧的元信息及熵增益值。
 
         Returns:
-            list[dict]: 选中的历史帧信息（按时间从近到远排列），每个 dict 包含:
-                pts_filename  -- 点云文件绝对路径
-                lidar_pose    -- LiDAR→global 的 4×4 变换矩阵
-                img_files     -- dict[cam_type] → 图像绝对路径
-                lidar2img     -- dict[cam_type] → lidar2img 4×4 矩阵
-                ego2img       -- dict[cam_type] → ego2img 4×4 矩阵
+            tuple: (selected_frames, gain_values)
+                selected_frames -- list[dict], 每个 dict 包含:
+                    pts_filename  -- 点云文件绝对路径
+                    lidar_pose    -- LiDAR→global 的 4×4 变换矩阵
+                    points        -- (N,4) 已变换到当前帧坐标系的点云
+                    img_files     -- dict[cam_type] → 图像绝对路径
+                    lidar2img     -- dict[cam_type] → lidar2img 4×4 矩阵
+                    ego2img       -- dict[cam_type] → ego2img 4×4 矩阵
+                gain_values -- list[float], 每帧融合后的熵增益值
         """
         current_frame = scene_infos[scene_token][frame_index]
         lidar_info = current_frame['data']['LIDAR_TOP']
@@ -152,22 +155,25 @@ class EntropyBasedHistoryLoader:
         )
 
         if len(all_history) == 0:
-            return []
+            return [], []
 
         # 逐帧融合 + 熵增益判定
         fused = current_points
         E_prev = self._composite_entropy(fused)
         selected = []
+        gain_values = []
 
         for h in all_history:
             fused = np.concatenate([fused, h['points']], axis=0)
             E_curr = self._composite_entropy(fused)
             gain = max(0.0, E_curr - E_prev)
+            gain_values.append(gain)
 
-            # 记录选中帧（去除临时的大块点云数据）
+            # 记录选中帧（保留已加载的点云数据供下游使用）
             selected.append({
                 'pts_filename': h['pts_filename'],
                 'lidar_pose': h['lidar_pose'],
+                'points': h['points'],
                 'img_files': h['img_files'],
                 'lidar2img': h['lidar2img'],
                 'ego2img': h['ego2img'],
@@ -178,7 +184,7 @@ class EntropyBasedHistoryLoader:
 
             E_prev = E_curr
 
-        return selected
+        return selected, gain_values
 
     # ------------------------------------------------------------------
     # 内部方法

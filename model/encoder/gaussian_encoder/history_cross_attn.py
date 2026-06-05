@@ -281,7 +281,7 @@ class HistoryCrossAttention(BaseModule):
         # 广播到所有帧
         weights = weights.expand(
             bs, num_anchor, self.num_cams, num_frames, self.num_pts, self.num_groups
-        )
+        ).clone()
 
         if self.training and self.attn_drop > 0:
             mask = torch.rand_like(weights) > self.attn_drop

@@ -23,6 +23,7 @@ input_shape = (704, 256)
 batch_size = 1
 # dataset label
 dataset_name_flag = 'surroundocc'
+pc_range = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
 
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True
@@ -30,7 +31,7 @@ img_norm_cfg = dict(
 
 train_pipeline = [
     dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadMultiViewImageHistory", num_history=3),
+    dict(type="EntropyBasedHistoryFrameLoader", max_window=6, min_window=3, entropy_gain_threshold=0.2, data_root=data_root, pc_range=pc_range),
     dict(type="LoadOccupancySurroundOcc", occ_path=occ_path, semantic=True, use_ego=False),
     dict(type="ResizeCropFlipImage"),
     dict(type="PhotoMetricDistortionMultiViewImage"),
@@ -41,7 +42,7 @@ train_pipeline = [
 
 test_pipeline = [
     dict(type="LoadMultiViewImageFromFiles", to_float32=True),
-    dict(type="LoadMultiViewImageHistory", num_history=3),
+    dict(type="EntropyBasedHistoryFrameLoader", max_window=6, min_window=3, entropy_gain_threshold=0.2, data_root=data_root, pc_range=pc_range),
     dict(type="LoadOccupancySurroundOcc", occ_path=occ_path, semantic=True, use_ego=False),
     dict(type="ResizeCropFlipImage"),
     dict(type="NormalizeMultiviewImage", **img_norm_cfg),
@@ -55,7 +56,6 @@ train_dataset_config = dict(
     imageset=anno_root + "nuscenes_infos_train_sweeps_occ.pkl",
     data_aug_conf=data_aug_conf,
     pipeline=train_pipeline,
-    num_lidar_history=3,
     phase='train'
 )
 
@@ -65,7 +65,6 @@ val_dataset_config = dict(
     imageset=anno_root + "nuscenes_infos_val_sweeps_occ.pkl",
     data_aug_conf=data_aug_conf,
     pipeline=test_pipeline,
-    num_lidar_history=3,
     phase='val'
 )
 
@@ -117,18 +116,19 @@ embed_dims = 128
 num_decoder = 2
 num_single_frame_decoder = 1
 num_densify_frame_decoder= 1
-pc_range = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
+
 scale_range = [0.08, 0.64]
 xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
 include_opa = True
-load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
-#load_from = 'ckpts/img_voxel_lite_28_4.pth'
+#load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
+load_from = 'ckpts/img_voxel_crossframe_31_1.pth'
 semantics = True
 semantic_dim = 17
 
 model = dict(
-    #freeze_img_backbone=True,
+    freeze_img_backbone=True,
+    freeze_img_neck=True,
     img_backbone_out_indices=[0, 1, 2, 3],
     img_backbone=dict(
         _delete_=True,
@@ -136,7 +136,7 @@ model = dict(
         depth=50,
         num_stages=4,
         out_indices=(0, 1, 2, 3),
-        frozen_stages=2,
+        frozen_stages=1,
         norm_cfg=dict(type='BN2d', requires_grad=False),
         norm_eval=True,
         style='caffe',
