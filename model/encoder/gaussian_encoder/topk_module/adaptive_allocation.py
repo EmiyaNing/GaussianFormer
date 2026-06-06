@@ -56,6 +56,12 @@ class AdaptiveAllocation(BaseModule):
         assert split_mode in ("constrained", "free"), \
             f"split_mode must be 'constrained' or 'free', got {split_mode}"
 
+        # Safe margin from pc_range boundary to avoid float32 precision issues
+        # when discretizing means to voxel grid coordinates.
+        # 1e-6 is too small for float32 (50.0 - 1e-6 ≈ 50.0), causing grid dim overflow.
+        # 0.1m gives safe headroom for typical grid_size=0.5m.
+        self.boundary_margin = 0.1
+
         # Pre-compute unit sigmoid factors for clone branch location shift
         # (same as DensifyOnly)
         unit_prob = [unit_xyz[i] / (pc_range[i + 3] - pc_range[i]) for i in range(3)]
@@ -207,13 +213,15 @@ class AdaptiveAllocation(BaseModule):
         opa_shift = safe_sigmoid(opa_shift_out)
 
         # New means: shift relative to old scale, clamp to pc_range
+        # Use boundary_margin to avoid float32 precision issues at grid edges
+        m = self.boundary_margin
         new_means = clone_gaussian.means + means_shift * clone_gaussian.scales
         new_means_x = torch.clamp(
-            new_means[:, 0], self.pc_range[0] + 1e-6, self.pc_range[3] - 1e-6)
+            new_means[:, 0], self.pc_range[0] + m, self.pc_range[3] - m)
         new_means_y = torch.clamp(
-            new_means[:, 1], self.pc_range[1] + 1e-6, self.pc_range[4] - 1e-6)
+            new_means[:, 1], self.pc_range[1] + m, self.pc_range[4] - m)
         new_means_z = torch.clamp(
-            new_means[:, 2], self.pc_range[2] + 1e-6, self.pc_range[5] - 1e-6)
+            new_means[:, 2], self.pc_range[2] + m, self.pc_range[5] - m)
         new_means = torch.stack([new_means_x, new_means_y, new_means_z], dim=-1)
         new_xyz_anchor = safe_sigmoid(new_means)  # convert to anchor format
 
@@ -315,16 +323,17 @@ class AdaptiveAllocation(BaseModule):
                     c2_loc, c2_scale, c2_rot, c2_sem, c2_opa,
                     device)
 
-        # ---- Boundary clamping (prevent InverseSigmoid NaN) ----
+        # ---- Boundary clamping (prevent InverseSigmoid NaN and grid overflow) ----
+        m = self.boundary_margin
         pc = self.pc_range
-        c1_means_x = torch.clamp(c1_means[:, 0], pc[0] + 1e-6, pc[3] - 1e-6)
-        c1_means_y = torch.clamp(c1_means[:, 1], pc[1] + 1e-6, pc[4] - 1e-6)
-        c1_means_z = torch.clamp(c1_means[:, 2], pc[2] + 1e-6, pc[5] - 1e-6)
+        c1_means_x = torch.clamp(c1_means[:, 0], pc[0] + m, pc[3] - m)
+        c1_means_y = torch.clamp(c1_means[:, 1], pc[1] + m, pc[4] - m)
+        c1_means_z = torch.clamp(c1_means[:, 2], pc[2] + m, pc[5] - m)
         c1_means = torch.stack([c1_means_x, c1_means_y, c1_means_z], dim=-1)
 
-        c2_means_x = torch.clamp(c2_means[:, 0], pc[0] + 1e-6, pc[3] - 1e-6)
-        c2_means_y = torch.clamp(c2_means[:, 1], pc[1] + 1e-6, pc[4] - 1e-6)
-        c2_means_z = torch.clamp(c2_means[:, 2], pc[2] + 1e-6, pc[5] - 1e-6)
+        c2_means_x = torch.clamp(c2_means[:, 0], pc[0] + m, pc[3] - m)
+        c2_means_y = torch.clamp(c2_means[:, 1], pc[1] + m, pc[4] - m)
+        c2_means_z = torch.clamp(c2_means[:, 2], pc[2] + m, pc[5] - m)
         c2_means = torch.stack([c2_means_x, c2_means_y, c2_means_z], dim=-1)
 
         c1_scales = torch.clamp(c1_scales, self.scale_range[0], self.scale_range[1])
@@ -652,15 +661,20 @@ class AdaptiveAllocation(BaseModule):
             result_means = torch.stack(result_means_list, dim=0)
             result_scales = torch.stack(result_scales_list, dim=0)
         else:
-            # Variable sizes: pad to max
+            # Variable sizes: pad to max with safe default values
             max_m = max(sizes)
-            result_features = self._pad_and_stack(result_features_list, max_m)
-            result_anchors = self._pad_and_stack(result_anchors_list, max_m)
-            result_opacities = self._pad_and_stack(result_opacities_list, max_m)
-            result_semantics = self._pad_and_stack(result_semantics_list, max_m)
-            result_rotations = self._pad_and_stack(result_rotations_list, max_m)
-            result_means = self._pad_and_stack(result_means_list, max_m)
-            result_scales = self._pad_and_stack(result_scales_list, max_m)
+            # Use safe fill values for padded gaussians:
+            # - means=0 (scene center), scales=scale_min (valid nonzero),
+            #   rot=[1,0,0,0] (identity quaternion), opa=0 (transparent), sem=0
+            sr0 = self.scale_range[0]
+            result_features = self._pad_and_stack(result_features_list, max_m, 0.0)
+            result_anchors = self._pad_and_stack(result_anchors_list, max_m, 0.0)
+            result_opacities = self._pad_and_stack(result_opacities_list, max_m, 0.0)
+            result_semantics = self._pad_and_stack(result_semantics_list, max_m, 0.0)
+            result_means = self._pad_and_stack(result_means_list, max_m, 0.0)
+            result_scales = self._pad_and_stack(result_scales_list, max_m, sr0)
+            # Rotations: pad with identity quaternion [1,0,0,0] to avoid degenerate matrices
+            result_rotations = self._pad_rotations(result_rotations_list, max_m)
 
         result_gaussian = GaussianPrediction(
             means=result_means,
@@ -677,13 +691,14 @@ class AdaptiveAllocation(BaseModule):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _pad_and_stack(tensor_list, max_size):
+    def _pad_and_stack(tensor_list, max_size, fill_value=0.0):
         """
         Pad each tensor in the list to max_size along dim 0, then stack.
 
         Args:
             tensor_list: list of tensors with same ndim, different dim-0
             max_size: target size for dim 0
+            fill_value: scalar value to fill padding with (default 0.0)
 
         Returns:
             stacked tensor of shape (len(tensor_list), max_size, ...)
@@ -691,9 +706,33 @@ class AdaptiveAllocation(BaseModule):
         padded = []
         for t in tensor_list:
             if t.shape[0] < max_size:
-                pad = torch.zeros(
+                pad = torch.full(
                     (max_size - t.shape[0], *t.shape[1:]),
+                    fill_value, device=t.device, dtype=t.dtype)
+                t = torch.cat([t, pad], dim=0)
+            padded.append(t)
+        return torch.stack(padded, dim=0)
+
+    @staticmethod
+    def _pad_rotations(tensor_list, max_size):
+        """
+        Pad rotation quaternions with identity [1, 0, 0, 0] instead of zeros
+        to avoid degenerate rotation matrices in downstream processing.
+
+        Args:
+            tensor_list: list of (N, 4) rotation tensors
+            max_size: target N
+
+        Returns:
+            stacked tensor of shape (len(tensor_list), max_size, 4)
+        """
+        padded = []
+        for t in tensor_list:
+            if t.shape[0] < max_size:
+                pad = torch.zeros(
+                    (max_size - t.shape[0], t.shape[1]),
                     device=t.device, dtype=t.dtype)
+                pad[:, 0] = 1.0  # identity quaternion: w=1, x=y=z=0
                 t = torch.cat([t, pad], dim=0)
             padded.append(t)
         return torch.stack(padded, dim=0)
