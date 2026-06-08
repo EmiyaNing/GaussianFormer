@@ -105,7 +105,10 @@ class SparseGaussian3DRefinementModule(BaseModule):
 
         if self.scale_act == 'sigmoid':
             gs_scales = safe_sigmoid(scale)
+        else:
+            gs_scales = scale
         gs_scales = self.scale_range[0] + (self.scale_range[1] - self.scale_range[0]) * gs_scales
+        gs_scales = gs_scales.clamp(min=self.scale_range[0], max=self.scale_range[1])
         
         semantics = output[..., self.semantic_start: (self.semantic_start + self.semantic_dim)]
         if self.semantics_activation == 'softmax':
