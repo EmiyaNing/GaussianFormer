@@ -14,3 +14,4 @@ from .topk_module.topk_densify_v2 import DensifyOnly
 from .ball_query_crossattn import BallQueryCrossAttn
 from .history_cross_attn import HistoryCrossAttention
 from .topk_module.adaptive_allocation import AdaptiveAllocation
+from .topk_module.adaptive_allocationv2 import AdaptiveAllocationv2
