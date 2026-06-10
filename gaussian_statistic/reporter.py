@@ -22,13 +22,23 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
     logger.info('=' * 60)
     logger.info(f"  Frames processed:  {stats['num_frames']}")
     logger.info(f"  Total Gaussians:     {stats['num_gaussians']}")
+    logger.info(f"  Coverage Threshold τ: {stats.get('cov_threshold', 'unknown')}")
+    logger.info(f"  Coverage Scope:       {stats.get('coverage_voxel_scope', 'unknown')}")
     logger.info('─' * 60)
 
     # 基础指标
     logger.info(f"  Mean Scale:          {stats['mean_scale']:.6f}")
+    logger.info(f"  Mean AR:             {stats['anisotropy_ratio']['mean_ar']:.6f}")
     logger.info(f"  Near-Spherical Ratio: {stats['near_spherical_ratio']:.6f}")
     logger.info(f"  LIGR:                {stats['ligr']:.6f}")
-    logger.info(f"  Mean Purity:         {stats['mean_purity']:.6f}")
+    logger.info(f"  Mean Coverage:       {stats['mean_coverage']:.6f}")
+    # Purity 系列（兼容新旧字段）
+    if 'mean_purity_valid' in stats:
+        logger.info(f"  Mean Purity(valid):    {stats['mean_purity_valid']:.6f}")
+        logger.info(f"  Mean Purity(penalized): {stats['mean_purity_penalized']:.6f}")
+        logger.info(f"  Unused Gaussian Ratio: {stats['unused_gaussian_ratio']:.6f}")
+    else:
+        logger.info(f"  Mean Purity:         {stats['mean_purity']:.6f}")
 
     logger.info('─' * 60)
     logger.info('  [Scale Percentiles]')
@@ -48,14 +58,25 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
     # Category-wise
     logger.info('─' * 60)
     logger.info('  [Category-wise Statistics]')
-    logger.info(f"    {'Class':>6s} | {'Count':>8s} | {'MeanScale':>10s} | {'MeanAR':>8s} | {'NSR':>8s} | {'Purity':>8s}")
-    logger.info('    ' + '-' * 65)
-    for c, v in sorted(stats['category_stats'].items()):
-        logger.info(
-            f"    {c:>6d} | {v['count']:>8d} | "
-            f"{v['mean_scale']:>10.6f} | {v['mean_ar']:>8.4f} | "
-            f"{v['near_spherical_ratio']:>8.4f} | {v['mean_purity']:>8.4f}"
-        )
+    has_ratio = 'ratio' in next(iter(stats['category_stats'].values()))
+    if has_ratio:
+        logger.info(f"    {'Class':>6s} | {'Count':>8s} | {'Ratio':>8s} | {'MeanScale':>10s} | {'MeanAR':>8s} | {'NSR':>8s} | {'Purity':>8s}")
+        logger.info('    ' + '-' * 75)
+        for c, v in sorted(stats['category_stats'].items()):
+            logger.info(
+                f"    {int(c):>6d} | {v['count']:>8d} | "
+                f"{v['ratio']:>8.6f} | {v['mean_scale']:>10.6f} | {v['mean_ar']:>8.4f} | "
+                f"{v['near_spherical_ratio']:>8.4f} | {v['mean_purity']:>8.4f}"
+            )
+    else:
+        logger.info(f"    {'Class':>6s} | {'Count':>8s} | {'MeanScale':>10s} | {'MeanAR':>8s} | {'NSR':>8s} | {'Purity':>8s}")
+        logger.info('    ' + '-' * 65)
+        for c, v in sorted(stats['category_stats'].items()):
+            logger.info(
+                f"    {int(c):>6d} | {v['count']:>8d} | "
+                f"{v['mean_scale']:>10.6f} | {v['mean_ar']:>8.4f} | "
+                f"{v['near_spherical_ratio']:>8.4f} | {v['mean_purity']:>8.4f}"
+            )
 
     # Distance-wise
     logger.info('─' * 60)
@@ -70,8 +91,9 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
         )
 
     # Distance-wise Coverage
+    scope_label = stats.get('coverage_voxel_scope', 'unknown')
     logger.info('─' * 60)
-    logger.info('  [Distance-wise Coverage]')
+    logger.info(f'  [Distance-wise {scope_label.capitalize()} Coverage]')
     for label, v in stats['distancewise_coverage'].items():
         logger.info(f"    {label:>12s}: {v:.4f}")
 
@@ -79,9 +101,8 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
 
     # ── JSON 文件写入 ─────────────────────────────────────
     json_path = os.path.join(work_dir, 'gaussian_statistic_result.json')
-    # 将内部 dict 转为可序列化格式
     serializable = _make_serializable(stats)
-    with open(json_path, 'w') as f:
+    with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(serializable, f, indent=2, ensure_ascii=False)
     logger.info(f'Statistics JSON saved to: {json_path}')
 

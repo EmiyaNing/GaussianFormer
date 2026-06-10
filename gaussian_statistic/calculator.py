@@ -103,8 +103,9 @@ def compute_ligr(scales, ar, t_scale, t_sphere):
     return ((scales.mean(dim=-1) > t_scale) & (ar < t_sphere)).float().mean().item()
 
 def compute_distance_stats(means, scales, t_sphere, distance_bins):
+    """Distance-wise stats using BEV Chebyshev distance: max(|x|, |y|)."""
     if means.numel() == 0: return {}
-    dist = torch.norm(means, dim=-1)
+    dist = torch.max(torch.abs(means[..., :2]), dim=-1).values
     s_hat = scales.mean(dim=-1)
     ar = scales.max(dim=-1).values/(scales.min(dim=-1).values+1e-8)
     r = {}
@@ -171,12 +172,21 @@ def compute_coverage_and_purity(
 
 
 def compute_distancewise_coverage(means, scales, rotations, occ_xyz, occ_cam_mask,
-    distance_bins, cov_threshold=3.0, precomp=None, chunk_size=10000):
+    distance_bins, cov_threshold=3.0, precomp=None, chunk_size=10000,
+    pred_class=None, exclude_classes=None):
     if means.numel() == 0: return {}
+    # 按语义类别过滤 Gaussian
+    if exclude_classes is not None and pred_class is not None:
+        excl = torch.tensor(exclude_classes, device=means.device, dtype=torch.long)
+        keep = ~torch.isin(pred_class, excl)
+        if keep.any():
+            means = means[keep]; scales = scales[keep]; rotations = rotations[keep]
+        else:
+            return {f'({distance_bins[i]},{distance_bins[i+1]})':0.0 for i in range(len(distance_bins)-1)}
     occ_flat = occ_xyz.reshape(-1, 3)
     mf = occ_cam_mask.reshape(-1).bool()
     if not mf.any(): return {f'({distance_bins[i]},{distance_bins[i+1]})':0.0 for i in range(len(distance_bins)-1)}
-    vx = occ_flat[mf]; vd = torch.norm(vx, dim=-1)
+    vx = occ_flat[mf]; vd = torch.max(torch.abs(vx[..., :2]), dim=-1).values
     if precomp is None:
         ci, Rm = _build_cov_inv(scales, rotations, return_R=True)
         sr = cov_threshold * scales.max(dim=-1).values
@@ -198,7 +208,8 @@ def compute_distancewise_coverage(means, scales, rotations, occ_xyz, occ_cam_mas
 
 
 def compute_category_stats(scales, semantics, rotations, means, occ_xyz, occ_label,
-    occ_cam_mask, t_sphere, num_classes, cov_threshold=3.0, precomp=None, chunk_size=10000):
+    occ_cam_mask, t_sphere, num_classes, cov_threshold=3.0, precomp=None, chunk_size=10000,
+    empty_label=17, ignore_empty=True):
     G = scales.shape[0]
     if G == 0: return {}
     s_hat = scales.mean(dim=-1)
@@ -206,6 +217,9 @@ def compute_category_stats(scales, semantics, rotations, means, occ_xyz, occ_lab
     pc = semantics.argmax(dim=-1)
     ofx = occ_xyz.reshape(-1,3); ofl = occ_label.reshape(-1).long()
     mf = occ_cam_mask.reshape(-1).bool()
+    # 排除 empty voxels
+    if ignore_empty and ofl is not None:
+        mf = mf & (ofl != empty_label)
     ppg = torch.zeros(G, dtype=torch.float32, device=scales.device)
     if mf.any():
         vx = ofx[mf]; vl = ofl[mf]
@@ -217,8 +231,10 @@ def compute_category_stats(scales, semantics, rotations, means, occ_xyz, occ_lab
             lp = precomp
         _, pm, pt = compute_coverage_and_purity(means, lp, vx, vl,
             cov_threshold=cov_threshold, chunk_size=chunk_size)
-        for g in range(G):
-            t = pt[g].item(); ppg[g] = 1.0 if t == 0 else pm[g].item()/t
+        # 向量化：unused Gaussian purity = 0.0
+        valid_g = pt > 0
+        ppg[valid_g] = pm[valid_g].float() / pt[valid_g].float().clamp(min=1)
+        # unused Gaussian 保持 ppg=0.0
     r = {}
     for c in range(num_classes):
         m = pc == c; cnt = m.sum().item()

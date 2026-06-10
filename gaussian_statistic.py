@@ -115,7 +115,7 @@ def main(local_rank, args):
         ckpt = torch.load(cfg.resume_from, map_location=map_location)
         raw_model.load_state_dict(ckpt.get("state_dict", ckpt), strict=True)
         logger.info('successfully resumed.')
-    elif cfg.load_from:
+    elif cfg.get('load_from', None):
         ckpt = torch.load(cfg.load_from, map_location='cpu')
         if 'state_dict' in ckpt:
             state_dict = ckpt['state_dict']
@@ -134,13 +134,18 @@ def main(local_rank, args):
     os.environ['eval'] = 'true'
 
     # ---- 统计聚合器 ----
-    # 从模型 head 或 config 中获取类别数量
-    if hasattr(raw_model, 'head') and hasattr(raw_model.head, 'num_classes'):
+    # 从模型 head 或 config 中获取类别数量（优先使用 --num-classes）
+    if args.num_classes is not None:
+        num_classes = args.num_classes
+    elif hasattr(raw_model, 'head') and hasattr(raw_model.head, 'num_classes'):
         num_classes = raw_model.head.num_classes
     elif hasattr(cfg.model, 'head') and 'num_classes' in cfg.model.head:
         num_classes = cfg.model.head.num_classes
     else:
         num_classes = 17
+    logger.info(f'num_classes for Gaussian statistics: {num_classes}')
+    logger.info(f'empty_label for occupancy statistics: {args.empty_label}')
+    logger.info(f'ignore_empty for coverage/purity: {args.ignore_empty}')
     aggregator = GaussianStatAggregator(
         t_sphere=args.t_sphere,
         t_scale=args.t_scale,
@@ -149,9 +154,11 @@ def main(local_rank, args):
         num_classes=num_classes,
         cov_threshold=args.cov_threshold,
         chunk_size=args.chunk_size,
+        exclude_classes=args.exclude_classes,
+        empty_label=args.empty_label,
+        ignore_empty=args.ignore_empty,
     )
 
-    print_freq = cfg.print_freq
     stat_freq = args.stat_freq
 
     with torch.no_grad():
@@ -182,7 +189,8 @@ def main(local_rank, args):
                         f'Gaussians: {snap["gaussians"]} | MeanScale: {snap["mean_scale"]:.4f} | '
                         f'NSR: {snap["nsr"]:.4f} | LIGR: {snap["ligr"]:.4f} | '
                         f'MeanVol: {snap["mean_vol"]:.4f} | MeanAR: {snap["mean_ar"]:.4f} | '
-                        f'Purity: {snap["mean_purity"]:.4f}'
+                        f'Cov: {snap["mean_coverage"]:.4f} | '
+                        f'Purity(valid): {snap.get("mean_purity_old", 0):.4f}'
                     )
                 else:
                     logger.info(f'[STAT] Iter {i_iter_val:5d} (no frames yet)')
@@ -208,8 +216,8 @@ if __name__ == '__main__':
                         help='Near-Spherical 阈值（AR < t_sphere 视为近球）')
     parser.add_argument('--t-scale', type=float, default=0.5,
                         help='Large Gaussian 尺寸阈值（s_hat > t_scale 视为大高斯）')
-    parser.add_argument('--cov-threshold', type=float, default=3.0,
-                        help='Coverage 马氏距离阈值（τ=3 对应 3σ 椭球）')
+    parser.add_argument('--cov-threshold', type=float, default=1.0,
+                        help='Coverage 马氏距离阈值（默认 1.0，对应 1σ 椭球）')
     parser.add_argument('--distance-bins', type=float, nargs='+',
                         default=[0, 10, 20, 30, 40, 50],
                         help='距离分桶边界，如: 0 10 20 30 40 50 70')
@@ -220,6 +228,16 @@ if __name__ == '__main__':
                         help='每隔多少帧打印一次中间统计快照（默认 100）')
     parser.add_argument('--chunk-size', type=int, default=30000,
                         help='Coverage/Purity 遍历时的 chunk 大小（默认 30000）')
+    parser.add_argument('--exclude-classes', type=int, nargs='+', default=None,
+                        help='[已弃用] 请使用 --exclude-gaussian-classes')
+    parser.add_argument('--exclude-gaussian-classes', type=int, nargs='+', default=None,
+                        help='Coverage 中排除的 Gaussian 预测类别索引')
+    parser.add_argument('--empty-label', type=int, default=17,
+                        help='GT occupancy 中 empty/free 类别标签，默认 17')
+    parser.add_argument('--ignore-empty', action='store_true', default=True,
+                        help='Coverage/Purity 是否排除 empty voxels')
+    parser.add_argument('--num-classes', type=int, default=None,
+                        help='语义类别数；None 表示从模型自动推断')
 
     args = parser.parse_args()
 
