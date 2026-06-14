@@ -24,6 +24,20 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
     logger.info(f"  Total Gaussians:     {stats['num_gaussians']}")
     logger.info(f"  Coverage Threshold τ: {stats.get('cov_threshold', 'unknown')}")
     logger.info(f"  Coverage Scope:       {stats.get('coverage_voxel_scope', 'unknown')}")
+    scale_sanity = stats.get('scale_sanity', {})
+    if scale_sanity:
+        logger.info(f"  Config Scale Range:   {scale_sanity.get('configured_scale_range', 'unknown')}")
+        logger.info(
+            f"  Observed s_hat Range: "
+            f"[{scale_sanity.get('observed_min_s_hat', 0):.6f}, "
+            f"{scale_sanity.get('observed_max_s_hat', 0):.6f}]")
+    coverage_debug = stats.get('coverage_debug', {})
+    if coverage_debug and not coverage_debug.get('coverage_counter_consistent', True):
+        logger.warning(
+            'Coverage counter consistency check failed: '
+            f"bins={coverage_debug.get('coverage_from_bins', 0):.8f}, "
+            f"scalar={coverage_debug.get('coverage_from_scalar', 0):.8f}, "
+            f"diff={coverage_debug.get('coverage_counter_abs_diff', 0):.8e}")
     logger.info('─' * 60)
 
     # 基础指标

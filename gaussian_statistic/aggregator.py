@@ -4,6 +4,7 @@ v5 核心优化：
 - 所有 per-bin/per-class 累加在 GPU 端完成，消除 ~116 次 .item() 同步/帧
 - 使用 scatter_add_ / bincount 矢量化分类和分桶
 - finalize() 时一次性 GPU→CPU 传输
+- count/covered/total 使用 int64，sum 使用 float64，避免千万级统计的 float32 精度饱和
 """
 
 import torch
@@ -20,7 +21,8 @@ class GaussianStatAggregator:
                  chunk_size=10000, exclude_classes: Optional[List[int]] = None,
                  empty_label=17, ignore_empty=True,
                  exclude_gaussian_classes: Optional[List[int]] = None,
-                 exclude_voxel_classes: Optional[List[int]] = None):
+                 exclude_voxel_classes: Optional[List[int]] = None,
+                 scale_range: Optional[List[float]] = None):
         self.t_sphere = t_sphere; self.t_scale = t_scale
         self.distance_bins = distance_bins or [0, 10, 20, 30, 40, 50]
         self.percentiles = percentiles or [50, 75, 90, 95]
@@ -28,6 +30,7 @@ class GaussianStatAggregator:
         self.chunk_size = chunk_size
         self.empty_label = empty_label
         self.ignore_empty = ignore_empty
+        self.scale_range = scale_range
         # 拆分 exclude_classes 为 Gaussian 过滤和 Voxel 过滤
         self.exclude_gaussian_classes = exclude_gaussian_classes if exclude_gaussian_classes is not None else exclude_classes
         self.exclude_voxel_classes = exclude_voxel_classes
@@ -57,21 +60,21 @@ class GaussianStatAggregator:
 
         # GPU 端累加器（消除 .item() 同步）
         self.device = None  # 延迟初始化
-        self._dist_count = None       # (n_bins,) float
+        self._dist_count = None       # (n_bins,) int64
         self._dist_sum_scale = None
         self._dist_sum_ar = None
         self._dist_nsr_count = None
         self._dist_nsr_total = None
-        self._cat_count = None        # (num_classes,) float
+        self._cat_count = None        # (num_classes,) int64
         self._cat_sum_scale = None
         self._cat_sum_ar = None
         self._cat_nsr_count = None
         self._cat_nsr_total = None
         self._cat_sum_purity = None
-        self._cat_purity_frames = None  # per-class: 有多少帧贡献了 purity
+        self._cat_purity_frames = None  # per-class: 有多少帧贡献了 purity, int64
 
         # Distance-wise Coverage GPU 累加器
-        self._dcov_covered = None     # (n_bins,) float
+        self._dcov_covered = None     # (n_bins,) int64
         self._dcov_total = None
 
     def _init_gpu_state(self, device):
@@ -81,20 +84,20 @@ class GaussianStatAggregator:
         self.device = device
         n_bins = len(self.distance_bins) - 1
         nc = self.num_classes
-        self._dist_count = torch.zeros(n_bins, device=device)
-        self._dist_sum_scale = torch.zeros(n_bins, device=device)
-        self._dist_sum_ar = torch.zeros(n_bins, device=device)
-        self._dist_nsr_count = torch.zeros(n_bins, device=device)
-        self._dist_nsr_total = torch.zeros(n_bins, device=device)
-        self._cat_count = torch.zeros(nc, device=device)
-        self._cat_sum_scale = torch.zeros(nc, device=device)
-        self._cat_sum_ar = torch.zeros(nc, device=device)
-        self._cat_nsr_count = torch.zeros(nc, device=device)
-        self._cat_nsr_total = torch.zeros(nc, device=device)
-        self._cat_sum_purity = torch.zeros(nc, device=device)
-        self._cat_purity_frames = torch.zeros(nc, device=device)
-        self._dcov_covered = torch.zeros(n_bins, device=device)
-        self._dcov_total = torch.zeros(n_bins, device=device)
+        self._dist_count = torch.zeros(n_bins, device=device, dtype=torch.long)
+        self._dist_sum_scale = torch.zeros(n_bins, device=device, dtype=torch.float64)
+        self._dist_sum_ar = torch.zeros(n_bins, device=device, dtype=torch.float64)
+        self._dist_nsr_count = torch.zeros(n_bins, device=device, dtype=torch.long)
+        self._dist_nsr_total = torch.zeros(n_bins, device=device, dtype=torch.long)
+        self._cat_count = torch.zeros(nc, device=device, dtype=torch.long)
+        self._cat_sum_scale = torch.zeros(nc, device=device, dtype=torch.float64)
+        self._cat_sum_ar = torch.zeros(nc, device=device, dtype=torch.float64)
+        self._cat_nsr_count = torch.zeros(nc, device=device, dtype=torch.long)
+        self._cat_nsr_total = torch.zeros(nc, device=device, dtype=torch.long)
+        self._cat_sum_purity = torch.zeros(nc, device=device, dtype=torch.float64)
+        self._cat_purity_frames = torch.zeros(nc, device=device, dtype=torch.long)
+        self._dcov_covered = torch.zeros(n_bins, device=device, dtype=torch.long)
+        self._dcov_total = torch.zeros(n_bins, device=device, dtype=torch.long)
         # 初始化排除类别的 GPU tensor
         if self.exclude_gaussian_classes is not None:
             self._exclude_gaussian_classes_tensor = torch.tensor(
@@ -152,22 +155,24 @@ class GaussianStatAggregator:
         bin_idx = torch.bucketize(dist, bin_edges) - 1          # 0-based
         valid = (bin_idx >= 0) & (bin_idx < n_bins)
         bc = bin_idx.clamp(0, n_bins - 1)
-        ones_g = torch.ones(G, device=device)
+        ones_g_long = torch.ones(G, device=device, dtype=torch.long)
+        valid_long = valid.to(torch.long)
+        valid_f64 = valid.to(torch.float64)
 
-        self._dist_count.scatter_add_(0, bc, valid.float())
-        self._dist_sum_scale.scatter_add_(0, bc, s_hat * valid.float())
-        self._dist_sum_ar.scatter_add_(0, bc, ar * valid.float())
-        self._dist_nsr_count.scatter_add_(0, bc, nsr_mask * valid.float())
-        self._dist_nsr_total.scatter_add_(0, bc, ones_g * valid.float())
+        self._dist_count.scatter_add_(0, bc, valid_long)
+        self._dist_sum_scale.scatter_add_(0, bc, s_hat.to(torch.float64) * valid_f64)
+        self._dist_sum_ar.scatter_add_(0, bc, ar.to(torch.float64) * valid_f64)
+        self._dist_nsr_count.scatter_add_(0, bc, (nsr_mask > 0).to(torch.long) * valid_long)
+        self._dist_nsr_total.scatter_add_(0, bc, ones_g_long * valid_long)
 
         # ---- Category-wise：GPU 端 scatter_add（带 pred_class 范围保护） ----
         valid_cls = (pred_class >= 0) & (pred_class < self.num_classes)
         pc = pred_class[valid_cls]
-        ones_g_valid = ones_g[valid_cls]
+        ones_g_valid = ones_g_long[valid_cls]
         self._cat_count.scatter_add_(0, pc, ones_g_valid)
-        self._cat_sum_scale.scatter_add_(0, pc, s_hat[valid_cls])
-        self._cat_sum_ar.scatter_add_(0, pc, ar[valid_cls])
-        self._cat_nsr_count.scatter_add_(0, pc, nsr_mask[valid_cls])
+        self._cat_sum_scale.scatter_add_(0, pc, s_hat[valid_cls].to(torch.float64))
+        self._cat_sum_ar.scatter_add_(0, pc, ar[valid_cls].to(torch.float64))
+        self._cat_nsr_count.scatter_add_(0, pc, (nsr_mask[valid_cls] > 0).to(torch.long))
         self._cat_nsr_total.scatter_add_(0, pc, ones_g_valid)
 
         # ---- 合并 Coverage + Purity ----
@@ -233,10 +238,11 @@ class GaussianStatAggregator:
         bin_idx = torch.bucketize(valid_dist, bin_edges) - 1
         valid_b = (bin_idx >= 0) & (bin_idx < n_bins)
         bc = bin_idx.clamp(0, n_bins - 1)
-        ones_n = torch.ones(valid_xyz.shape[0], device=device)
+        valid_b_long = valid_b.to(torch.long)
+        ones_n_long = torch.ones(valid_xyz.shape[0], device=device, dtype=torch.long)
 
-        self._dcov_total.scatter_add_(0, bc, ones_n * valid_b.float())
-        self._dcov_covered.scatter_add_(0, bc, covered.float() * valid_b.float())
+        self._dcov_total.scatter_add_(0, bc, ones_n_long * valid_b_long)
+        self._dcov_covered.scatter_add_(0, bc, covered.to(torch.long) * valid_b_long)
 
         # ---- 全局 Mean Coverage（仅统计距离分桶内的体素，与 Distance-wise 口径一致） ----
         self.total_cov_covered += (covered & valid_b).sum().item()
@@ -244,16 +250,17 @@ class GaussianStatAggregator:
 
         # ---- Category-wise Purity（GPU 端 scatter_add） ----
         if pred_class.shape[0] > 0:
-            p_match_cls = torch.zeros(self.num_classes, dtype=torch.float32, device=device)
-            p_total_cls = torch.zeros(self.num_classes, dtype=torch.float32, device=device)
-            p_match_cls.scatter_add_(0, pred_class, purity_match.float())
-            p_total_cls.scatter_add_(0, pred_class, purity_total.float())
+            valid_pred_cls = (pred_class >= 0) & (pred_class < self.num_classes)
+            p_match_cls = torch.zeros(self.num_classes, dtype=torch.float64, device=device)
+            p_total_cls = torch.zeros(self.num_classes, dtype=torch.float64, device=device)
+            p_match_cls.scatter_add_(0, pred_class[valid_pred_cls], purity_match[valid_pred_cls].to(torch.float64))
+            p_total_cls.scatter_add_(0, pred_class[valid_pred_cls], purity_total[valid_pred_cls].to(torch.float64))
             # Per-frame per-class purity ratio
             valid_cls = p_total_cls > 0
-            frame_purity = torch.zeros(self.num_classes, dtype=torch.float32, device=device)
+            frame_purity = torch.zeros(self.num_classes, dtype=torch.float64, device=device)
             frame_purity[valid_cls] = p_match_cls[valid_cls] / p_total_cls[valid_cls].clamp(min=1)
             self._cat_sum_purity += frame_purity
-            self._cat_purity_frames += valid_cls.float()
+            self._cat_purity_frames += valid_cls.to(torch.long)
 
             # ---- 新版 Purity 累加（P0-2） ----
             # 将所有 Gaussian 标记为 unused 或 valid
@@ -303,6 +310,8 @@ class GaussianStatAggregator:
                 'mean_vol': _s(self.vol_sum, self.vol_count), 'mean_ar': mean_ar,
                 'mean_coverage': _s(self.total_cov_covered, self.total_cov_total),
                 'mean_purity_old': _s(self.total_purity_sum, self.total_gaussians),
+                'mean_purity_valid': _s(self.total_valid_purity_sum, self.total_valid_purity_count),
+                'mean_purity_penalized': _s(self.total_penalized_purity_sum, self.total_purity_gaussians),
                 'unused_ratio': _s(self.total_unused_gaussians, self.total_purity_gaussians)}
 
     # ------------------------------------------------------------------
@@ -349,6 +358,14 @@ class GaussianStatAggregator:
                   'cov_threshold': self.cov_threshold,
                   'coverage_voxel_scope': 'non_empty_visible' if self.ignore_empty else 'visible'}
 
+        observed_min_scale = min(all_s_hat) if all_s_hat else 0.0
+        observed_max_scale = max(all_s_hat) if all_s_hat else 0.0
+        result['scale_sanity'] = {
+            'configured_scale_range': self.scale_range,
+            'observed_min_s_hat': float(observed_min_scale),
+            'observed_max_s_hat': float(observed_max_scale),
+        }
+
         result['scale_percentiles'] = {f'P{p}': _p(all_s_hat, p) for p in self.percentiles}
         result['scale_volume'] = {'mean_volume': _s(self.vol_sum, self.vol_count),
             'p90_volume': _p(all_vols, 90), 'p95_volume': _p(all_vols, 95)}
@@ -365,7 +382,9 @@ class GaussianStatAggregator:
             'mean_scale': _s(cat_sum_scale[c], cat_count[c]),
             'mean_ar': _s(cat_sum_ar[c], cat_count[c]),
             'near_spherical_ratio': _s(cat_nsr_count[c], cat_nsr_total[c]),
-            'mean_purity': _s(cat_sum_purity[c], cat_purity_frames[c])}
+            'mean_purity': _s(cat_sum_purity[c], cat_purity_frames[c]),
+            'scale_sanity_warning': (
+                cat_count[c] > 0 and _s(cat_sum_scale[c], cat_count[c]) > observed_max_scale + 1e-6)}
             for c in range(self.num_classes)}
 
         result['distance_stats'] = {
@@ -373,7 +392,9 @@ class GaussianStatAggregator:
                 'count': int(dist_count[i]),
                 'mean_scale': _s(dist_sum_scale[i], dist_count[i]),
                 'mean_ar': _s(dist_sum_ar[i], dist_count[i]),
-                'near_spherical_ratio': _s(dist_nsr_count[i], dist_nsr_total[i])}
+                'near_spherical_ratio': _s(dist_nsr_count[i], dist_nsr_total[i]),
+                'scale_sanity_warning': (
+                    dist_count[i] > 0 and _s(dist_sum_scale[i], dist_count[i]) > observed_max_scale + 1e-6)}
             for i in range(n_bins)}
 
         result['distancewise_coverage'] = {
@@ -398,6 +419,7 @@ class GaussianStatAggregator:
             'coverage_from_bins': coverage_from_bins,
             'coverage_from_scalar': coverage_from_scalar,
             'coverage_counter_abs_diff': abs(coverage_from_bins - coverage_from_scalar),
+            'coverage_counter_consistent': abs(coverage_from_bins - coverage_from_scalar) < 1e-6,
         }
         result['distancewise_coverage_debug'] = {
             f'({self.distance_bins[i]},{self.distance_bins[i+1]})': {

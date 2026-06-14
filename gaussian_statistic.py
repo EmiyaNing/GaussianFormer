@@ -155,8 +155,11 @@ def main(local_rank, args):
         cov_threshold=args.cov_threshold,
         chunk_size=args.chunk_size,
         exclude_classes=args.exclude_classes,
+        exclude_gaussian_classes=args.exclude_gaussian_classes,
+        exclude_voxel_classes=args.exclude_voxel_classes,
         empty_label=args.empty_label,
         ignore_empty=args.ignore_empty,
+        scale_range=cfg.get('scale_range', None),
     )
 
     stat_freq = args.stat_freq
@@ -190,7 +193,9 @@ def main(local_rank, args):
                         f'NSR: {snap["nsr"]:.4f} | LIGR: {snap["ligr"]:.4f} | '
                         f'MeanVol: {snap["mean_vol"]:.4f} | MeanAR: {snap["mean_ar"]:.4f} | '
                         f'Cov: {snap["mean_coverage"]:.4f} | '
-                        f'Purity(valid): {snap.get("mean_purity_old", 0):.4f}'
+                        f'Purity(valid): {snap.get("mean_purity_valid", 0):.4f} | '
+                        f'Purity(penalized): {snap.get("mean_purity_penalized", 0):.4f} | '
+                        f'Purity(old): {snap.get("mean_purity_old", 0):.4f}'
                     )
                 else:
                     logger.info(f'[STAT] Iter {i_iter_val:5d} (no frames yet)')
@@ -232,6 +237,8 @@ if __name__ == '__main__':
                         help='[已弃用] 请使用 --exclude-gaussian-classes')
     parser.add_argument('--exclude-gaussian-classes', type=int, nargs='+', default=None,
                         help='Coverage 中排除的 Gaussian 预测类别索引')
+    parser.add_argument('--exclude-voxel-classes', type=int, nargs='+', default=None,
+                        help='Coverage/Purity 中排除的 GT voxel 类别索引')
     parser.add_argument('--empty-label', type=int, default=17,
                         help='GT occupancy 中 empty/free 类别标签，默认 17')
     parser.add_argument('--ignore-empty', action='store_true', default=True,
