@@ -70,11 +70,11 @@ num_decoder = 2
 num_single_frame_decoder = 1
 num_densify_frame_decoder= 1
 pc_range = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
-scale_range = [0.08, 0.64]
+scale_range = [0.08, 1.44]
 xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
 include_opa = True
-load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
+load_from = 'ckpts/r101_dcn_fcos3d_pretrain.pth'
 semantics = True
 semantic_dim = 17
 
@@ -147,13 +147,13 @@ model = dict(
             semantics_activation='softplus',
         ),
         densify_layer=dict(
-            type='AdaptiveAllocationV4',
+            type='DensifyOnly',
             feat_embed_dim = 128,
             semantic_dim = 17,
+            topk_count = 2560,
             pc_range = pc_range,
             scale_range = scale_range,
             unit_xyz=[4.0, 4.0, 1.0],
-            allocation_ratio=0.8,
         ),
         spconv_layer=dict(
             _delete_=True,
@@ -173,7 +173,6 @@ model = dict(
             "ffn",
             "norm",
             "refine",
-            "densify",
         ] * num_single_frame_decoder + [
             "spconv",
             "norm",
@@ -181,6 +180,7 @@ model = dict(
             "ffn",
             "norm",
             "refine",
+            "densify",
         ],
     ),
     head=dict(
@@ -192,8 +192,8 @@ model = dict(
             mean=[0, 0, -1.0],
             scale=[100, 100, 8.0],
         ),
-        use_localagg_react=True,
         with_empty=True,
+        use_localagg_react=True,
         cuda_kwargs=dict(
             _delete_=True,
             scale_multiplier=3,

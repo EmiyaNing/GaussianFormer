@@ -33,7 +33,7 @@ optimizer = dict(
 )
 onecyclelr = True
 grad_max_norm = 35
-# ========= model config ===============
+# =========== loss config (with GaussianDensifyLoss) ===========
 loss = dict(
     type='MultiLoss',
     loss_cfgs=[
@@ -55,14 +55,31 @@ loss = dict(
                 1.01552756, 1.06897009, 1.30013094, 1.07253735, 0.94637502, 1.10087012,
                 1.26960524, 1.06258364, 1.189019,   1.06217292, 1.00595144, 0.85706115,
                 1.03923299, 0.90867526, 0.8936431,  0.85486129, 0.8527829,  0.5       ]),
-        ])
+        dict(
+            type='GaussianDensifyLoss',
+            coverage_weight=0.1,
+            route_ent_weight=0.01,
+            ratio_balance_weight=0.05,
+            cov_threshold=3.0,
+            cov_temperature=0.1,
+            voxel_sample_ratio=0.05,
+            coverage_compute_every=5,
+            ratio_targets=dict(
+                clone=(0.05, 0.30),
+                split=(0.05, 0.25),
+                atten=(0.02, 0.15),
+            ),
+        ),
+    ])
 
 loss_input_convertion = dict(
     pred_occ="pred_occ",
     gaussian="gaussian",
     sampled_xyz="sampled_xyz",
     sampled_label="sampled_label",
-    occ_mask="occ_mask"
+    occ_mask="occ_mask",
+    densify_op_prob="densify_op_prob",
+    densify_op_id="densify_op_id",
 )
 # ========= model config ===============
 embed_dims = 128

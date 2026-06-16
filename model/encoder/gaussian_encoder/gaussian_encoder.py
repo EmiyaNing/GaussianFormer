@@ -133,7 +133,12 @@ class GaussianOccEncoder(BaseEncoder):
                     gaussian
                 )
 
-                prediction.append({'gaussian': gaussian})
+                pred_entry = {'gaussian': gaussian}
+                # pass through routing info for auxiliary loss
+                if hasattr(self.layers[i], '_last_op_prob'):
+                    pred_entry['densify_op_prob'] = self.layers[i]._last_op_prob
+                    pred_entry['densify_op_id'] = self.layers[i]._last_op_id
+                prediction.append(pred_entry)
                 if i != len(self.operation_order) - 1:
                     anchor_embed = self.anchor_encoder(anchor)
             elif "query" in op:
@@ -150,4 +155,11 @@ class GaussianOccEncoder(BaseEncoder):
             else:
                 raise NotImplementedError(f"{op} is not supported.")
 
-        return {"representation": prediction}
+        # promote densify routing info to top level for loss access
+        result = {"representation": prediction}
+        for entry in prediction:
+            if 'densify_op_prob' in entry:
+                result['densify_op_prob'] = entry['densify_op_prob']
+                result['densify_op_id'] = entry['densify_op_id']
+                break
+        return result

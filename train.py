@@ -96,6 +96,16 @@ def main(local_rank, args):
         raw_model = my_model
     logger.info('done ddp model')
 
+    # init grad norm tracker
+    from misc.grad_norm_tracker import (
+        GradNormTracker, get_model_grad_norms, get_model_param_counts)
+    if local_rank == 0:
+        grad_norm_tracker = GradNormTracker(
+            config_path=args.py_config)
+        grad_norm_tracker.set_param_counts(get_model_param_counts(raw_model))
+    else:
+        grad_norm_tracker = None
+
     train_dataset_loader, val_dataset_loader = get_dataloader(
         cfg.train_dataset_config,
         cfg.val_dataset_config,
@@ -117,7 +127,7 @@ def main(local_rank, args):
         scheduler = OneCycleLR(
             optimizer.optimizer,
             num_steps=len(train_dataset_loader) * max_num_epochs,
-            lr_range=(2e-5, 2e-4)
+            lr_range=(2e-7, 2e-4)
         )
     else:
         scheduler = CosineLRScheduler(
@@ -178,6 +188,7 @@ def main(local_rank, args):
     first_run = True
     grad_accumulation = args.gradient_accumulation
     grad_norm = 0
+    last_comp_norms = {}
     from misc.metric_util import MeanIoU
     if cfg.dataset_name_flag == 'surroundocc':
         miou_metric = MeanIoU(
@@ -237,6 +248,11 @@ def main(local_rank, args):
             if not amp:
                 loss.backward()
                 if (global_iter + 1) % grad_accumulation == 0:
+                    # collect per-component gradient norms before clipping
+                    if local_rank == 0 and grad_norm_tracker is not None:
+                        comp_norms = get_model_grad_norms(raw_model)
+                        grad_norm_tracker.add(comp_norms)
+                        last_comp_norms = comp_norms
                     grad_norm = torch.nn.utils.clip_grad_norm_(my_model.parameters(), cfg.grad_max_norm)
                     optimizer.step()
                     optimizer.zero_grad()
@@ -244,6 +260,11 @@ def main(local_rank, args):
                 scaler.scale(loss).backward()
                 if (global_iter + 1) % grad_accumulation == 0:
                     scaler.unscale_(optimizer)
+                    # collect per-component gradient norms before clipping (unscale already called)
+                    if local_rank == 0 and grad_norm_tracker is not None:
+                        comp_norms = get_model_grad_norms(raw_model)
+                        grad_norm_tracker.add(comp_norms)
+                        last_comp_norms = comp_norms
                     grad_norm = torch.nn.utils.clip_grad_norm_(my_model.parameters(), cfg.grad_max_norm)
                     scaler.step(optimizer)
                     scaler.update()
@@ -257,9 +278,11 @@ def main(local_rank, args):
             if i_iter % print_freq == 0 and local_rank == 0:
                 #lr = max([p['lr'] for p in optimizer.param_groups])
                 lr = optimizer.param_groups[0]['lr']
-                logger.info('[TRAIN] Epoch %d Iter %5d/%d: Loss: %.3f (%.3f), grad_norm: %.3f, lr: %.7f, time: %.3f (%.3f)'%(
-                    epoch, i_iter, len(train_dataset_loader), 
-                    loss.item(), np.mean(loss_list), grad_norm, lr,
+                # extract densify grad norm from last_comp_norms
+                densify_grad = last_comp_norms.get('encoder.densify', -1.0)
+                logger.info('[TRAIN] Epoch %d Iter %5d/%d: Loss: %.3f (%.3f), grad_norm: %.3f, densify_grad: %.3f, lr: %.7f, time: %.3f (%.3f)'%(
+                    epoch, i_iter, len(train_dataset_loader),
+                    loss.item(), np.mean(loss_list), grad_norm, densify_grad, lr,
                     time_e - time_s, data_time_e - data_time_s))
                 detailed_loss = []
                 for loss_name, loss_value in loss_dict.items():
@@ -356,9 +379,15 @@ def main(local_rank, args):
         logger.info(f'mIoU: {miou}, iou2: {iou2}')
         logger.info('Current val loss is %.3f' % (np.mean(val_loss_list)))
         miou_metric.reset()
-    
+    # write gradient norm analysis report
+    if local_rank == 0 and grad_norm_tracker is not None:
+        report_path = osp.join(args.work_dir, 'grad_norm_analysis.md')
+        grad_norm_tracker.write_markdown_report(report_path)
+        logger.info(f'Gradient norm analysis saved to: {report_path}')
+
     if writer is not None:
         writer.close()
+         
         
 
 if __name__ == '__main__':

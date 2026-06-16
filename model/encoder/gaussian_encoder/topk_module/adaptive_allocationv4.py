@@ -875,6 +875,10 @@ class AdaptiveAllocationV4(BaseModule):
             semantics=result_semantics,
         )
 
+        # store routing info for auxiliary loss (accessed via encoder)
+        self._last_op_prob = op_prob
+        self._last_op_id = op_id
+
         return result_anchors, result_gaussian, result_features
 
     # ------------------------------------------------------------------
