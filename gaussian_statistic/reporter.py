@@ -38,6 +38,12 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
             f"bins={coverage_debug.get('coverage_from_bins', 0):.8f}, "
             f"scalar={coverage_debug.get('coverage_from_scalar', 0):.8f}, "
             f"diff={coverage_debug.get('coverage_counter_abs_diff', 0):.8e}")
+    category_coverage_debug = stats.get('category_coverage_debug', {})
+    if category_coverage_debug and not category_coverage_debug.get('category_total_matches_scalar', True):
+        logger.warning(
+            'Category coverage denominator consistency check failed: '
+            f"category_total={category_coverage_debug.get('sum_category_total', 0):.0f}, "
+            f"scalar_total={category_coverage_debug.get('scalar_cov_total', 0):.0f}")
     logger.info('─' * 60)
 
     # 基础指标
@@ -73,24 +79,39 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
     logger.info('─' * 60)
     logger.info('  [Category-wise Statistics]')
     has_ratio = 'ratio' in next(iter(stats['category_stats'].values()))
+    has_coverage = 'coverage' in next(iter(stats['category_stats'].values()))
     if has_ratio:
-        logger.info(f"    {'Class':>6s} | {'Count':>8s} | {'Ratio':>8s} | {'MeanScale':>10s} | {'MeanAR':>8s} | {'NSR':>8s} | {'Purity':>8s}")
-        logger.info('    ' + '-' * 75)
+        if has_coverage:
+            logger.info(f"    {'Class':>6s} | {'Count':>8s} | {'Ratio':>8s} | {'MeanScale':>10s} | {'MeanAR':>8s} | {'NSR':>8s} | {'Purity':>8s} | {'Cov':>8s} | {'AlignCov':>8s}")
+            logger.info('    ' + '-' * 97)
+        else:
+            logger.info(f"    {'Class':>6s} | {'Count':>8s} | {'Ratio':>8s} | {'MeanScale':>10s} | {'MeanAR':>8s} | {'NSR':>8s} | {'Purity':>8s}")
+            logger.info('    ' + '-' * 75)
         for c, v in sorted(stats['category_stats'].items()):
-            logger.info(
+            row = (
                 f"    {int(c):>6d} | {v['count']:>8d} | "
                 f"{v['ratio']:>8.6f} | {v['mean_scale']:>10.6f} | {v['mean_ar']:>8.4f} | "
                 f"{v['near_spherical_ratio']:>8.4f} | {v['mean_purity']:>8.4f}"
             )
+            if has_coverage:
+                row += f" | {v['coverage']:>8.4f} | {v['aligned_coverage']:>8.4f}"
+            logger.info(row)
     else:
-        logger.info(f"    {'Class':>6s} | {'Count':>8s} | {'MeanScale':>10s} | {'MeanAR':>8s} | {'NSR':>8s} | {'Purity':>8s}")
-        logger.info('    ' + '-' * 65)
+        if has_coverage:
+            logger.info(f"    {'Class':>6s} | {'Count':>8s} | {'MeanScale':>10s} | {'MeanAR':>8s} | {'NSR':>8s} | {'Purity':>8s} | {'Cov':>8s} | {'AlignCov':>8s}")
+            logger.info('    ' + '-' * 87)
+        else:
+            logger.info(f"    {'Class':>6s} | {'Count':>8s} | {'MeanScale':>10s} | {'MeanAR':>8s} | {'NSR':>8s} | {'Purity':>8s}")
+            logger.info('    ' + '-' * 65)
         for c, v in sorted(stats['category_stats'].items()):
-            logger.info(
+            row = (
                 f"    {int(c):>6d} | {v['count']:>8d} | "
                 f"{v['mean_scale']:>10.6f} | {v['mean_ar']:>8.4f} | "
                 f"{v['near_spherical_ratio']:>8.4f} | {v['mean_purity']:>8.4f}"
             )
+            if has_coverage:
+                row += f" | {v['coverage']:>8.4f} | {v['aligned_coverage']:>8.4f}"
+            logger.info(row)
 
     # Distance-wise
     logger.info('─' * 60)
@@ -110,6 +131,12 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
     logger.info(f'  [Distance-wise {scope_label.capitalize()} Coverage]')
     for label, v in stats['distancewise_coverage'].items():
         logger.info(f"    {label:>12s}: {v:.4f}")
+
+    if 'distancewise_purity' in stats:
+        logger.info('─' * 60)
+        logger.info(f'  [Distance-wise {scope_label.capitalize()} Purity]')
+        for label, v in stats['distancewise_purity'].items():
+            logger.info(f"    {label:>12s}: {v:.4f}")
 
     logger.info('=' * 60)
 

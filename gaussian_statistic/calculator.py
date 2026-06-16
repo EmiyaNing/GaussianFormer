@@ -124,15 +124,25 @@ def compute_distance_stats(means, scales, t_sphere, distance_bins):
 
 def compute_coverage_and_purity(
     means, precomp, voxel_xyz, voxel_label,
-    cov_threshold=3.0, chunk_size=10000, use_fast_mahalanobis=True
+    cov_threshold=3.0, chunk_size=10000, use_fast_mahalanobis=True,
+    voxel_bin_idx=None, n_bins=None, return_extra_stats=False
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """v5 voxel-chunked 矢量化版。chunk_size=10000（默认）。"""
     N, G = voxel_xyz.shape[0], means.shape[0]
     device = means.device
     if N == 0 or G == 0:
-        return (torch.zeros(N, dtype=torch.bool, device=device),
+        base = (torch.zeros(N, dtype=torch.bool, device=device),
                 torch.zeros(G, dtype=torch.int64, device=device),
                 torch.zeros(G, dtype=torch.int64, device=device))
+        if not return_extra_stats:
+            return base
+        n_extra_bins = n_bins or 0
+        extra_stats = {
+            'aligned_covered': torch.zeros(N, dtype=torch.bool, device=device),
+            'distance_purity_match': torch.zeros(n_extra_bins, dtype=torch.int64, device=device),
+            'distance_purity_total': torch.zeros(n_extra_bins, dtype=torch.int64, device=device),
+        }
+        return (*base, extra_stats)
 
     cov_inv = precomp['cov_inv']; R = precomp['R']
     scales_vec = precomp['scales_vec']; search_radius = precomp['search_radius']
@@ -141,6 +151,12 @@ def compute_coverage_and_purity(
     covered = torch.zeros(N, dtype=torch.bool, device=device)
     p_match = torch.zeros(G, dtype=torch.int64, device=device)
     p_total = torch.zeros(G, dtype=torch.int64, device=device)
+    if return_extra_stats:
+        if voxel_bin_idx is None or n_bins is None:
+            raise ValueError('voxel_bin_idx and n_bins are required when return_extra_stats=True')
+        aligned_covered = torch.zeros(N, dtype=torch.bool, device=device)
+        distance_purity_match = torch.zeros(n_bins, dtype=torch.int64, device=device)
+        distance_purity_total = torch.zeros(n_bins, dtype=torch.int64, device=device)
 
     for start in range(0, N, chunk_size):
         end = min(start + chunk_size, N)
@@ -165,10 +181,29 @@ def compute_coverage_and_purity(
 
         hv, hg = vi[hit], gj[hit]
         covered[start + hv] = True
+        hit_match = chunk_l[hv] == pred_class[hg]
         p_total.scatter_add_(0, hg, torch.ones(hg.shape[0], dtype=torch.int64, device=device))
-        p_match.scatter_add_(0, hg, (chunk_l[hv] == pred_class[hg]).long())
+        p_match.scatter_add_(0, hg, hit_match.long())
 
-    return covered, p_match, p_total
+        if return_extra_stats:
+            global_hv = start + hv
+            aligned_covered[global_hv[hit_match]] = True
+            hit_bins = voxel_bin_idx[global_hv]
+            valid_bins = (hit_bins >= 0) & (hit_bins < n_bins)
+            if valid_bins.any():
+                vb = hit_bins[valid_bins]
+                distance_purity_total.scatter_add_(
+                    0, vb, torch.ones(vb.shape[0], dtype=torch.int64, device=device))
+                distance_purity_match.scatter_add_(0, vb, hit_match[valid_bins].long())
+
+    if not return_extra_stats:
+        return covered, p_match, p_total
+    extra_stats = {
+        'aligned_covered': aligned_covered,
+        'distance_purity_match': distance_purity_match,
+        'distance_purity_total': distance_purity_total,
+    }
+    return covered, p_match, p_total, extra_stats
 
 
 def compute_distancewise_coverage(means, scales, rotations, occ_xyz, occ_cam_mask,

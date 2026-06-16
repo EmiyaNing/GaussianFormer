@@ -72,10 +72,15 @@ class GaussianStatAggregator:
         self._cat_nsr_total = None
         self._cat_sum_purity = None
         self._cat_purity_frames = None  # per-class: 有多少帧贡献了 purity, int64
+        self._cat_cov_total = None
+        self._cat_cov_covered = None
+        self._cat_aligned_cov_covered = None
 
         # Distance-wise Coverage GPU 累加器
         self._dcov_covered = None     # (n_bins,) int64
         self._dcov_total = None
+        self._dpurity_match = None
+        self._dpurity_total = None
 
     def _init_gpu_state(self, device):
         """延迟初始化 GPU 累加器。"""
@@ -96,8 +101,13 @@ class GaussianStatAggregator:
         self._cat_nsr_total = torch.zeros(nc, device=device, dtype=torch.long)
         self._cat_sum_purity = torch.zeros(nc, device=device, dtype=torch.float64)
         self._cat_purity_frames = torch.zeros(nc, device=device, dtype=torch.long)
+        self._cat_cov_total = torch.zeros(nc, device=device, dtype=torch.long)
+        self._cat_cov_covered = torch.zeros(nc, device=device, dtype=torch.long)
+        self._cat_aligned_cov_covered = torch.zeros(nc, device=device, dtype=torch.long)
         self._dcov_covered = torch.zeros(n_bins, device=device, dtype=torch.long)
         self._dcov_total = torch.zeros(n_bins, device=device, dtype=torch.long)
+        self._dpurity_match = torch.zeros(n_bins, device=device, dtype=torch.long)
+        self._dpurity_total = torch.zeros(n_bins, device=device, dtype=torch.long)
         # 初始化排除类别的 GPU tensor
         if self.exclude_gaussian_classes is not None:
             self._exclude_gaussian_classes_tensor = torch.tensor(
@@ -221,6 +231,13 @@ class GaussianStatAggregator:
 
         # 使用 Chebyshev 距离（max(|x|, |y|)），对应方柱体区域
         valid_dist = torch.max(torch.abs(valid_xyz[..., :2]), dim=-1).values
+        n_bins = len(self.distance_bins) - 1
+        bin_edges = torch.tensor(self.distance_bins, device=device)
+        bin_idx = torch.bucketize(valid_dist, bin_edges) - 1
+        valid_b = (bin_idx >= 0) & (bin_idx < n_bins)
+        bc = bin_idx.clamp(0, n_bins - 1)
+        valid_b_long = valid_b.to(torch.long)
+
         precomp = calculator.precompute_frame_data(means, scales, rotations, semantics,
                                                     cov_threshold=self.cov_threshold)
         if label_flat is not None:
@@ -228,21 +245,30 @@ class GaussianStatAggregator:
         else:
             valid_label = torch.zeros(valid_xyz.shape[0], dtype=torch.long, device=device)
 
-        covered, purity_match, purity_total = calculator.compute_coverage_and_purity(
+        covered, purity_match, purity_total, extra_stats = calculator.compute_coverage_and_purity(
             means, precomp, valid_xyz, valid_label,
-            cov_threshold=self.cov_threshold, chunk_size=self.chunk_size)
+            cov_threshold=self.cov_threshold, chunk_size=self.chunk_size,
+            voxel_bin_idx=torch.where(valid_b, bin_idx, torch.full_like(bin_idx, -1)),
+            n_bins=n_bins, return_extra_stats=True)
 
         # Distance-wise Coverage：GPU 端 bucketize + scatter_add
-        n_bins = len(self.distance_bins) - 1
-        bin_edges = torch.tensor(self.distance_bins, device=device)
-        bin_idx = torch.bucketize(valid_dist, bin_edges) - 1
-        valid_b = (bin_idx >= 0) & (bin_idx < n_bins)
-        bc = bin_idx.clamp(0, n_bins - 1)
-        valid_b_long = valid_b.to(torch.long)
         ones_n_long = torch.ones(valid_xyz.shape[0], device=device, dtype=torch.long)
 
         self._dcov_total.scatter_add_(0, bc, ones_n_long * valid_b_long)
         self._dcov_covered.scatter_add_(0, bc, covered.to(torch.long) * valid_b_long)
+        self._dpurity_match += extra_stats['distance_purity_match']
+        self._dpurity_total += extra_stats['distance_purity_total']
+
+        # Category-wise Coverage：按 GT label 分组，分母与 global coverage 同一 scope
+        valid_label_cls = (valid_label >= 0) & (valid_label < self.num_classes) & valid_b
+        if valid_label_cls.any():
+            lc = valid_label[valid_label_cls]
+            self._cat_cov_total.scatter_add_(
+                0, lc, torch.ones(lc.shape[0], device=device, dtype=torch.long))
+            self._cat_cov_covered.scatter_add_(
+                0, lc, covered[valid_label_cls].to(torch.long))
+            self._cat_aligned_cov_covered.scatter_add_(
+                0, lc, extra_stats['aligned_covered'][valid_label_cls].to(torch.long))
 
         # ---- 全局 Mean Coverage（仅统计距离分桶内的体素，与 Distance-wise 口径一致） ----
         self.total_cov_covered += (covered & valid_b).sum().item()
@@ -338,8 +364,13 @@ class GaussianStatAggregator:
         cat_nsr_total = self._cat_nsr_total.cpu().tolist()
         cat_sum_purity = self._cat_sum_purity.cpu().tolist()
         cat_purity_frames = self._cat_purity_frames.cpu().tolist()
+        cat_cov_total = self._cat_cov_total.cpu().tolist()
+        cat_cov_covered = self._cat_cov_covered.cpu().tolist()
+        cat_aligned_cov_covered = self._cat_aligned_cov_covered.cpu().tolist()
         dcov_covered = self._dcov_covered.cpu().tolist()
         dcov_total = self._dcov_total.cpu().tolist()
+        dpurity_match = self._dpurity_match.cpu().tolist()
+        dpurity_total = self._dpurity_total.cpu().tolist()
 
         def _s(a, b): return a/b if b else 0.0
         def _p(arr, q): return float(np.percentile(arr, q)) if arr else 0.0
@@ -383,6 +414,11 @@ class GaussianStatAggregator:
             'mean_ar': _s(cat_sum_ar[c], cat_count[c]),
             'near_spherical_ratio': _s(cat_nsr_count[c], cat_nsr_total[c]),
             'mean_purity': _s(cat_sum_purity[c], cat_purity_frames[c]),
+            'coverage': _s(cat_cov_covered[c], cat_cov_total[c]),
+            'aligned_coverage': _s(cat_aligned_cov_covered[c], cat_cov_total[c]),
+            'coverage_total': int(cat_cov_total[c]),
+            'coverage_covered': int(cat_cov_covered[c]),
+            'aligned_coverage_covered': int(cat_aligned_cov_covered[c]),
             'scale_sanity_warning': (
                 cat_count[c] > 0 and _s(cat_sum_scale[c], cat_count[c]) > observed_max_scale + 1e-6)}
             for c in range(self.num_classes)}
@@ -400,6 +436,11 @@ class GaussianStatAggregator:
         result['distancewise_coverage'] = {
             f'({self.distance_bins[i]},{self.distance_bins[i+1]})':
                 _s(dcov_covered[i], dcov_total[i])
+            for i in range(n_bins)}
+
+        result['distancewise_purity'] = {
+            f'({self.distance_bins[i]},{self.distance_bins[i+1]})':
+                _s(dpurity_match[i], dpurity_total[i])
             for i in range(n_bins)}
 
         # ---- Coverage debug 自检（P0-3） ----
@@ -428,5 +469,19 @@ class GaussianStatAggregator:
                 'coverage': _s(dcov_covered[i], dcov_total[i]),
             }
             for i in range(n_bins)}
+        result['distancewise_purity_debug'] = {
+            f'({self.distance_bins[i]},{self.distance_bins[i+1]})': {
+                'match': float(dpurity_match[i]),
+                'total': float(dpurity_total[i]),
+                'purity': _s(dpurity_match[i], dpurity_total[i]),
+            }
+            for i in range(n_bins)}
+        sum_cat_cov_total = float(sum(cat_cov_total))
+        result['category_coverage_debug'] = {
+            'coverage_scope': 'non_empty_visible' if self.ignore_empty else 'visible',
+            'sum_category_total': sum_cat_cov_total,
+            'scalar_cov_total': scalar_cov_total,
+            'category_total_matches_scalar': abs(sum_cat_cov_total - scalar_cov_total) < 0.5,
+        }
 
         return result

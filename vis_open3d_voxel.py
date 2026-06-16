@@ -14,6 +14,8 @@ import open3d as o3d
 import open3d.core as o3c
 import open3d.visualization.gui as gui
 
+from visualize_color_utils import get_adaptive_gaussian_colors
+
 gui.Application.instance.initialize()
 
 # 内存监控装饰器
@@ -478,7 +480,8 @@ def save_occ_error(save_dir, pred_occ, gt_occ, name, dataset='nusc', show_window
 def save_gaussian_with_gt_occ(save_dir, gaussian_data, gt_occ, name,
                                 scalar=1.5, ignore_opa=False, filter_zsize=False,
                                 dataset='nusc', show_window=True,
-                                max_gaussians=25600, max_voxels=50000):
+                                max_gaussians=25600, max_voxels=50000,
+                                adaptive_color=False, adaptive_color_seed=42):
     """同时可视化 Semantic Gaussian（语义着色）和 GT Occupancy（灰色）。
 
     Args:
@@ -707,7 +710,8 @@ def save_gaussian_with_gt_occ(save_dir, gaussian_data, gt_occ, name,
 def vis_gaussian_occ_match(save_dir, gaussian_data, gt_occ, name,
                            scalar=1.5, ignore_opa=False, filter_zsize=False,
                            dataset='nusc', show_window=True,
-                           max_gaussians=25600, max_voxels=50000):
+                           max_gaussians=25600, max_voxels=50000,
+                           adaptive_color=False, adaptive_color_seed=42):
     """可视化高斯球与GT Occupancy的几何匹配程度。
 
     只展示能够几何包裹住某个/某些GT Occupancy网格中心的高斯球。
@@ -1066,7 +1070,10 @@ def create_ellipsoid(center, radii, rotation, color, opacity=1.0, resolution=4):
 
 
 @memory_monitor
-def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, filter_zsize=False, show_window=True, max_gaussians=25600):
+def save_gaussian(
+        save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False,
+        filter_zsize=False, show_window=True, max_gaussians=25600,
+        adaptive_color=False, adaptive_color_seed=42):
     print(f"[save_gaussian] 开始处理 {name}")
 
     empty_label = 17
@@ -1124,6 +1131,10 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
         print("⚠ 没有有效的高斯点可可视化")
         return
 
+    adaptive_colors = None
+    if adaptive_color:
+        adaptive_colors = get_adaptive_gaussian_colors(
+            pred, scales, seed=adaptive_color_seed)
 
     # ---------- 合并所有椭球体为单个网格 ----------
     resolution = 16
@@ -1142,7 +1153,10 @@ def save_gaussian(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, f
         radii = scales[idx] * scalar
         rot_matrix = Quaternion(rotations[idx]).rotation_matrix
 
-        base_color = sem_cmap[pred[idx]][:3].copy()
+        if adaptive_colors is not None:
+            base_color = adaptive_colors[idx].copy()
+        else:
+            base_color = sem_cmap[pred[idx]][:3].copy()
         if np.allclose(base_color, [1.0, 1.0, 1.0], atol=0.1):
             continue
 
@@ -1252,7 +1266,10 @@ def generate_sphere_points(resolution=3):
     return np.array(points)
 
 
-def save_gaussian_point(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False, filter_zsize=False, show_window=True, max_gaussians=25600):
+def save_gaussian_point(
+        save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False,
+        filter_zsize=False, show_window=True, max_gaussians=25600,
+        adaptive_color=False, adaptive_color_seed=42):
     """使用Open3D点云的高斯分布3D可视化 - 优化内存版本（每个高斯球用27个点表示形状）"""
     print(f"[save_gaussian_point] 开始处理 {name}")
     
@@ -1338,6 +1355,11 @@ def save_gaussian_point(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=Fa
         opas = opas[indices]
         pred = pred[indices]
 
+    adaptive_colors = None
+    if adaptive_color:
+        adaptive_colors = get_adaptive_gaussian_colors(
+            pred, scales, seed=adaptive_color_seed)
+
     # 生成单位球面上的27个点
     sphere_points = generate_sphere_points(resolution=3)
     print(f"[save_gaussian_point] 生成了 {len(sphere_points)} 个球面点")
@@ -1362,7 +1384,9 @@ def save_gaussian_point(save_dir, gaussian_data, name, scalar=1.5, ignore_opa=Fa
             rot_matrix = Quaternion(rotations[idx]).rotation_matrix
             
             # 获取基础颜色
-            if len(pred) > idx:
+            if adaptive_colors is not None:
+                base_color = adaptive_colors[idx].copy()
+            elif len(pred) > idx:
                 base_color = sem_cmap[pred[idx]][:3].copy()  # 只取RGB
             else:
                 base_color = sem_cmap[0][:3].copy()  # 默认颜色

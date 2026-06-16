@@ -31,6 +31,7 @@ from mpl_toolkits.axes_grid1 import ImageGrid
 import os
 
 from model.utils.safe_ops import safe_sigmoid
+from visualize_color_utils import get_adaptive_gaussian_colors
 
 
 def get_grid_coords(dims, resolution):
@@ -342,7 +343,9 @@ def get_nuscenes_colormap():
     ).astype(np.float32) / 255.
     return colors
 
-def save_gaussian(save_dir, gaussian, name, scalar=1.5, ignore_opa=False, filter_zsize=False):
+def save_gaussian(
+        save_dir, gaussian, name, scalar=1.5, ignore_opa=False,
+        filter_zsize=False, adaptive_color=False, adaptive_color_seed=42):
 
     empty_label = 17
     sem_cmap = get_nuscenes_colormap()
@@ -383,6 +386,11 @@ def save_gaussian(save_dir, gaussian, name, scalar=1.5, ignore_opa=False, filter
     rotations = rotations[mask]
     opas = opas[mask]
     pred = pred[mask]
+
+    adaptive_colors = None
+    if adaptive_color:
+        adaptive_colors = get_adaptive_gaussian_colors(
+            pred, scales, seed=adaptive_color_seed)
 
     # number of ellipsoids 
     ellipNumber = means.shape[0]
@@ -426,9 +434,14 @@ def save_gaussian(save_dir, gaussian, name, scalar=1.5, ignore_opa=False, filter
 
         xyz = xyz + center[None, None, ...]
 
+        if adaptive_colors is not None:
+            face_color = adaptive_colors[indx]
+        else:
+            face_color = sem_cmap[pred[indx]]
+
         ax.plot_surface(
             xyz[..., 1], -xyz[..., 0], xyz[..., 2], 
-            rstride=1, cstride=1, color=sem_cmap[pred[indx]], linewidth=0, alpha=opas[indx], shade=True)
+            rstride=1, cstride=1, color=face_color, linewidth=0, alpha=opas[indx], shade=True)
 
     plt.axis("equal")
     # plt.gca().set_box_aspect([1, 1, 1])

@@ -1,15 +1,19 @@
 try:
     from vis_open3d_voxel import (
         save_occ, save_gaussian, save_gaussian_topdown,
+        save_gaussian_point,
         save_occ_error, save_gaussian_with_gt_occ,
         vis_gaussian_occ_match,
     )
 except:
     try:
         from vis import save_occ, save_gaussian, save_gaussian_topdown
+        save_gaussian_point = None
         # save_occ_error / save_gaussian_with_gt_occ / vis_gaussian_occ_match 可能在 vis.py 中不存在，导入兜底
         try:
-            from vis_open3d_voxel import save_occ_error, save_gaussian_with_gt_occ, vis_gaussian_occ_match
+            from vis_open3d_voxel import (
+                save_gaussian_point, save_occ_error,
+                save_gaussian_with_gt_occ, vis_gaussian_occ_match)
         except:
             pass
     except:
@@ -99,6 +103,7 @@ def main(local_rank, args):
     
     writer = None
     timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+    os.makedirs(args.work_dir, exist_ok=True)
     log_file = osp.join(args.work_dir, f'{timestamp}.log')
     logger = MMLogger('selfocc', log_file=log_file)
     MMLogger._instance_dict['selfocc'] = logger
@@ -203,6 +208,8 @@ def main(local_rank, args):
             ignore_opa = True,
             filter_zsize = True
         )
+    draw_gaussian_params['adaptive_color'] = args.vis_gaussian_adaptive_color
+    draw_gaussian_params['adaptive_color_seed'] = args.seed
 
     with torch.no_grad():
         for i_iter_val, data in enumerate(val_dataset_loader):
@@ -275,6 +282,14 @@ def main(local_rank, args):
                         True, 0, dataset=args.dataset)
                 if args.vis_gaussian:
                     save_gaussian(
+                        save_dir,
+                        result_dict['gaussian'],
+                        f'val_{i_iter_val}_gaussian',
+                        **draw_gaussian_params)
+                if args.vis_gaussian_point:
+                    if save_gaussian_point is None:
+                        raise ImportError('save_gaussian_point 需要 vis_open3d_voxel.py / Open3D 可用')
+                    save_gaussian_point(
                         save_dir,
                         result_dict['gaussian'],
                         f'val_{i_iter_val}_gaussian',
@@ -467,6 +482,8 @@ def main_stream(local_rank, args):
             ignore_opa=True,
             filter_zsize=True,
         )
+    draw_gaussian_params['adaptive_color'] = args.vis_gaussian_adaptive_color
+    draw_gaussian_params['adaptive_color_seed'] = args.seed
 
     # ── FIFO 队列初始化 ──
     if args.fifo:
@@ -789,6 +806,14 @@ def main_stream(local_rank, args):
                         result_dict['gaussian'],
                         f'{frame_tag}_gaussian',
                         **draw_gaussian_params)
+                if args.vis_gaussian_point:
+                    if save_gaussian_point is None:
+                        raise ImportError('save_gaussian_point 需要 vis_open3d_voxel.py / Open3D 可用')
+                    save_gaussian_point(
+                        scene_vis_dir,
+                        result_dict['gaussian'],
+                        f'{frame_tag}_gaussian',
+                        **draw_gaussian_params)
 
                 # Gaussian FIFO 融合后的高斯可视化
                 if args.vis_gaussian and merged_gaussian_list[idx] is not None:
@@ -936,6 +961,10 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--vis-occ', action='store_true', default=False)
     parser.add_argument('--vis-gaussian', action='store_true', default=False)
+    parser.add_argument('--vis-gaussian-point', action='store_true', default=False,
+                        help='使用点云形式可视化 Semantic Gaussian')
+    parser.add_argument('--vis-gaussian-adaptive-color', action='store_true', default=False,
+                        help='根据 Gaussian 语义类别和平均尺寸自适应选择红/蓝/灰颜色')
     parser.add_argument('--vis_gaussian_topdown', action='store_true', default=False)
     parser.add_argument('--vis-index', type=int, nargs='+', default=[])
     parser.add_argument('--num-samples', type=int, default=1)
