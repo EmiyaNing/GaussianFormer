@@ -362,8 +362,10 @@ def save_gaussian(
     sems = gaussian.semantics[0].detach().cpu().numpy() # g, 18
     pred = np.argmax(sems, axis=-1)
 
-    if ignore_opa:
+    if ignore_opa and not adaptive_color:
         opas[:] = 1.
+        mask = (pred != empty_label)
+    elif adaptive_color:
         mask = (pred != empty_label)
     else:
         mask = (pred != empty_label) & (opas > 0.75)
@@ -390,7 +392,7 @@ def save_gaussian(
     adaptive_colors = None
     if adaptive_color:
         adaptive_colors = get_adaptive_gaussian_colors(
-            pred, scales, seed=adaptive_color_seed)
+            pred, scales, opas, seed=adaptive_color_seed)
 
     # number of ellipsoids 
     ellipNumber = means.shape[0]
@@ -436,12 +438,14 @@ def save_gaussian(
 
         if adaptive_colors is not None:
             face_color = adaptive_colors[indx]
+            face_alpha = 1.0
         else:
             face_color = sem_cmap[pred[indx]]
+            face_alpha = opas[indx]
 
         ax.plot_surface(
             xyz[..., 1], -xyz[..., 0], xyz[..., 2], 
-            rstride=1, cstride=1, color=face_color, linewidth=0, alpha=opas[indx], shade=True)
+            rstride=1, cstride=1, color=face_color, linewidth=0, alpha=face_alpha, shade=True)
 
     plt.axis("equal")
     # plt.gca().set_box_aspect([1, 1, 1])

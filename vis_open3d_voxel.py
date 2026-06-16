@@ -1103,7 +1103,7 @@ def save_gaussian(
         pred = np.ones(len(means)) if len(means) > 0 else np.array([])
 
     # 过滤条件
-    if ignore_opa:
+    if ignore_opa and not adaptive_color:
         opas[:] = 1.
     mask = (pred != empty_label)
 
@@ -1134,7 +1134,7 @@ def save_gaussian(
     adaptive_colors = None
     if adaptive_color:
         adaptive_colors = get_adaptive_gaussian_colors(
-            pred, scales, seed=adaptive_color_seed)
+            pred, scales, opas, seed=adaptive_color_seed)
 
     # ---------- 合并所有椭球体为单个网格 ----------
     resolution = 16
@@ -1160,10 +1160,13 @@ def save_gaussian(
         if np.allclose(base_color, [1.0, 1.0, 1.0], atol=0.1):
             continue
 
-        # 根据不透明度混入白色背景：透明度越低 → 越接近白色
-        opa_val = float(opas[idx])
-        opa_val = np.clip(opa_val, 0.0, 1.0)
-        color = base_color * opa_val + np.array([1.0, 1.0, 1.0]) * (1.0 - opa_val)
+        if adaptive_colors is not None:
+            color = base_color
+        else:
+            # 根据不透明度混入白色背景：透明度越低 → 越接近白色
+            opa_val = float(opas[idx])
+            opa_val = np.clip(opa_val, 0.0, 1.0)
+            color = base_color * opa_val + np.array([1.0, 1.0, 1.0]) * (1.0 - opa_val)
 
         # 缩放 -> 旋转 -> 平移
         transformed_vertices = base_vertices * radii
@@ -1313,8 +1316,10 @@ def save_gaussian_point(
         pred = np.ones(len(means)) if len(means) > 0 else np.array([])
 
     # 过滤条件
-    if ignore_opa:
+    if ignore_opa and not adaptive_color:
         opas[:] = 1.
+        mask = (pred != empty_label)
+    elif adaptive_color:
         mask = (pred != empty_label)
     else:
         mask = (pred != empty_label) & (opas > 0.1)
@@ -1358,7 +1363,7 @@ def save_gaussian_point(
     adaptive_colors = None
     if adaptive_color:
         adaptive_colors = get_adaptive_gaussian_colors(
-            pred, scales, seed=adaptive_color_seed)
+            pred, scales, opas, seed=adaptive_color_seed)
 
     # 生成单位球面上的27个点
     sphere_points = generate_sphere_points(resolution=3)
@@ -1395,10 +1400,13 @@ def save_gaussian_point(
             if np.allclose(base_color, [1.0, 1.0, 1.0], atol=0.1):
                 continue
             
-            # 根据不透明度混入白色背景：透明度越低 → 越接近白色
-            opa_val = float(opas[idx])
-            opa_val = np.clip(opa_val, 0.0, 1.0)
-            color = base_color * opa_val + np.array([1.0, 1.0, 1.0]) * (1.0 - opa_val)
+            if adaptive_colors is not None:
+                color = base_color
+            else:
+                # 根据不透明度混入白色背景：透明度越低 → 越接近白色
+                opa_val = float(opas[idx])
+                opa_val = np.clip(opa_val, 0.0, 1.0)
+                color = base_color * opa_val + np.array([1.0, 1.0, 1.0]) * (1.0 - opa_val)
             
             # 为当前高斯球生成27个形状点
             for sphere_point in sphere_points:

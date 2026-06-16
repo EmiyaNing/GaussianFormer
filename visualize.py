@@ -964,7 +964,7 @@ if __name__ == '__main__':
     parser.add_argument('--vis-gaussian-point', action='store_true', default=False,
                         help='使用点云形式可视化 Semantic Gaussian')
     parser.add_argument('--vis-gaussian-adaptive-color', action='store_true', default=False,
-                        help='根据 Gaussian 语义类别和平均尺寸自适应选择红/蓝/灰颜色')
+                        help='根据 Gaussian opacity 和平均尺寸自适应选择红/蓝/灰颜色')
     parser.add_argument('--vis_gaussian_topdown', action='store_true', default=False)
     parser.add_argument('--vis-index', type=int, nargs='+', default=[])
     parser.add_argument('--num-samples', type=int, default=1)
