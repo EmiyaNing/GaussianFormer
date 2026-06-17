@@ -35,6 +35,269 @@ warnings.filterwarnings("ignore")
 def pass_print(*args, **kwargs):
     pass
 
+
+ALLOCATION_OP_NAMES = {
+    0: 'keep',
+    1: 'clone',
+    2: 'split',
+    3: 'opacity_attenuation',
+}
+
+ALLOCATION_COLOR_MAP = {
+    0: [0.55, 0.55, 0.55],
+    1: [0.10, 0.35, 1.00],
+    2: [1.00, 0.10, 0.10],
+    3: [1.00, 0.85, 0.05],
+}
+
+
+class AllocationOperationCollector:
+    """Runtime wrapper collector for AdaptiveAllocationV4 visualization."""
+
+    def __init__(self, model, enabled=False, logger=None):
+        self.enabled = enabled
+        self.logger = logger
+        self._handles = []
+        self._original_methods = []
+        self.records = []
+        self.current_iter = None
+        self.current_tag = None
+        self.latest_record = None
+        self.summary = self._empty_summary()
+        if self.enabled:
+            self._install(model)
+
+    @staticmethod
+    def _empty_summary():
+        return {
+            'input_gaussians': 0,
+            'selected_topk': 0,
+            'keep_total': 0,
+            'keep_from_non_topk': 0,
+            'keep_from_router': 0,
+            'clone': 0,
+            'split': 0,
+            'opacity_attenuation': 0,
+            'expected_output_gaussians': 0,
+            'num_forwards': 0,
+            'num_batch_items': 0,
+        }
+
+    def _install(self, model):
+        modules = [
+            (name, module)
+            for name, module in model.named_modules()
+            if module.__class__.__name__ == 'AdaptiveAllocationV4'
+        ]
+        if len(modules) == 0:
+            self.enabled = False
+            if self.logger is not None:
+                self.logger.warning(
+                    '[AllocationStatistic] AdaptiveAllocationV4 not found; disabled.')
+            return
+
+        for name, module in modules:
+            original_routing = module.compute_operation_routing
+
+            def wrapped_routing(h, selected_mask, _orig=original_routing, _module=module):
+                result = _orig(h, selected_mask)
+                _module._allocation_route_cache = {
+                    'selected_mask': selected_mask.detach(),
+                    'op_id': result[3].detach(),
+                }
+                return result
+
+            module.compute_operation_routing = wrapped_routing
+            self._original_methods.append((module, original_routing))
+            self._handles.append(module.register_forward_hook(self._make_forward_hook(name)))
+
+        if self.logger is not None:
+            self.logger.info(
+                f'[AllocationStatistic] enabled on {len(modules)} AdaptiveAllocationV4 module(s).')
+
+    def _make_forward_hook(self, module_name):
+        def hook(module, inputs, output):
+            if not self.enabled:
+                return
+            route = getattr(module, '_allocation_route_cache', None)
+            if route is None:
+                return
+            op_id = route['op_id']
+            selected_mask = route['selected_mask']
+            if output is None or len(output) < 3:
+                return
+            output_size = int(output[2].shape[1])
+            record = self._build_record(
+                module_name, op_id, selected_mask, output_size)
+            self.latest_record = record
+            self.records.append(record)
+            self._accumulate(record)
+            module._allocation_route_cache = None
+        return hook
+
+    def _build_record(self, module_name, op_id, selected_mask, output_size):
+        op_id_cpu = op_id.detach().to('cpu')
+        selected_cpu = selected_mask.detach().to('cpu')
+        per_batch = []
+        output_ids = []
+
+        for b in range(op_id_cpu.shape[0]):
+            cur_op = op_id_cpu[b].to(torch.long)
+            cur_selected = selected_cpu[b].to(torch.bool)
+            n = int(cur_op.numel())
+            keep_mask = cur_op == 0
+            clone_mask = cur_op == 1
+            split_mask = cur_op == 2
+            atten_mask = cur_op == 3
+            non_topk_keep = keep_mask & (~cur_selected)
+            routed_keep = keep_mask & cur_selected
+
+            clone_count = int(clone_mask.sum().item())
+            split_count = int(split_mask.sum().item())
+            expected_output = n + clone_count + split_count
+
+            out = torch.full((output_size,), -1, dtype=torch.long)
+            out[:n] = cur_op
+            cursor = n
+            if clone_count > 0:
+                out[cursor:cursor + clone_count] = 1
+                cursor += clone_count
+            if split_count > 0:
+                out[cursor:cursor + split_count] = 2
+
+            item = {
+                'batch_index': b,
+                'input_gaussians': n,
+                'selected_topk': int(cur_selected.sum().item()),
+                'keep_total': int(keep_mask.sum().item()),
+                'keep_from_non_topk': int(non_topk_keep.sum().item()),
+                'keep_from_router': int(routed_keep.sum().item()),
+                'clone': clone_count,
+                'split': split_count,
+                'opacity_attenuation': int(atten_mask.sum().item()),
+                'expected_output_gaussians': expected_output,
+                'padded_output_gaussians': output_size,
+            }
+            per_batch.append(item)
+            output_ids.append(out)
+
+        return {
+            'iter': self.current_iter,
+            'tag': self.current_tag,
+            'module': module_name,
+            'per_batch': per_batch,
+            'output_op_ids': output_ids,
+        }
+
+    def _accumulate(self, record):
+        self.summary['num_forwards'] += 1
+        for item in record['per_batch']:
+            self.summary['num_batch_items'] += 1
+            for key in (
+                'input_gaussians', 'selected_topk', 'keep_total',
+                'keep_from_non_topk', 'keep_from_router', 'clone', 'split',
+                'opacity_attenuation', 'expected_output_gaussians',
+            ):
+                self.summary[key] += item[key]
+
+    def start_iter(self, iter_idx, tag=None):
+        if not self.enabled:
+            return
+        self.current_iter = int(iter_idx)
+        self.current_tag = tag
+        self.latest_record = None
+
+    def get_output_op_ids(self, batch_idx=0):
+        if not self.enabled or self.latest_record is None:
+            return None
+        output_ids = self.latest_record.get('output_op_ids', [])
+        if batch_idx >= len(output_ids):
+            return None
+        return output_ids[batch_idx].numpy()
+
+    def get_draw_params(self, base_params, batch_idx=0, enable_color=True):
+        params = dict(base_params)
+        if not enable_color:
+            return params
+        op_ids = self.get_output_op_ids(batch_idx=batch_idx)
+        if op_ids is not None:
+            params.update({
+                'allocation_color': True,
+                'allocation_op_ids': op_ids,
+                'allocation_color_map': ALLOCATION_COLOR_MAP,
+            })
+        return params
+
+    def close(self):
+        for handle in self._handles:
+            handle.remove()
+        self._handles = []
+        for module, original in self._original_methods:
+            module.compute_operation_routing = original
+            if hasattr(module, '_allocation_route_cache'):
+                module._allocation_route_cache = None
+        self._original_methods = []
+        self.latest_record = None
+
+    def dump(self, save_dir):
+        if not self.enabled:
+            return
+        os.makedirs(save_dir, exist_ok=True)
+        summary = dict(self.summary)
+        total = max(summary['input_gaussians'], 1)
+        summary['ratios'] = {
+            'keep_total': summary['keep_total'] / total,
+            'keep_from_non_topk': summary['keep_from_non_topk'] / total,
+            'keep_from_router': summary['keep_from_router'] / total,
+            'clone': summary['clone'] / total,
+            'split': summary['split'] / total,
+            'opacity_attenuation': summary['opacity_attenuation'] / total,
+            'expected_output_gaussians': summary['expected_output_gaussians'] / total,
+        }
+        json_path = os.path.join(save_dir, 'allocation_stats_summary.json')
+        with open(json_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+
+        csv_path = os.path.join(save_dir, 'allocation_stats_per_iter.csv')
+        with open(csv_path, 'w') as f:
+            f.write(
+                'iter,tag,module,batch,input,topk,keep,non_topk_keep,'
+                'routed_keep,clone,split,atten,expected_output,padded_output\n')
+            for record in self.records:
+                for item in record['per_batch']:
+                    f.write(
+                        f"{record['iter']},{record['tag']},{record['module']},"
+                        f"{item['batch_index']},{item['input_gaussians']},"
+                        f"{item['selected_topk']},{item['keep_total']},"
+                        f"{item['keep_from_non_topk']},{item['keep_from_router']},"
+                        f"{item['clone']},{item['split']},"
+                        f"{item['opacity_attenuation']},"
+                        f"{item['expected_output_gaussians']},"
+                        f"{item['padded_output_gaussians']}\n")
+
+        report_path = os.path.join(save_dir, 'allocation_stats_report.md')
+        with open(report_path, 'w') as f:
+            f.write('# AdaptiveAllocationV4 Operation Statistics\n\n')
+            f.write('| Metric | Count | Ratio |\n')
+            f.write('| --- | ---: | ---: |\n')
+            for key in (
+                'input_gaussians', 'keep_total', 'keep_from_non_topk',
+                'keep_from_router', 'clone', 'split',
+                'opacity_attenuation', 'expected_output_gaussians',
+            ):
+                ratio = '-' if key == 'input_gaussians' else f"{summary['ratios'][key]:.6f}"
+                f.write(f"| {key} | {summary[key]} | {ratio} |\n")
+            f.write('\n## Color Legend\n\n')
+            f.write('| Operation | Color |\n')
+            f.write('| --- | --- |\n')
+            f.write('| keep | gray |\n')
+            f.write('| clone | blue |\n')
+            f.write('| split | red |\n')
+            f.write('| opacity attenuation | yellow |\n')
+
+        if self.logger is not None:
+            self.logger.info(f'[AllocationStatistic] saved to: {save_dir}')
+
 # ──────────────────────────────────────────────
 # FIFO 时序融合 import（流式可视化使用）
 # ──────────────────────────────────────────────
@@ -193,7 +456,11 @@ def main(local_rank, args):
 
     my_model.eval()
     os.environ['eval'] = 'true'
-    if args.vis_occ or args.vis_occ_error or args.vis_gaussian or args.vis_gaussian_point or args.vis_gaussian_topdown or args.vis_gaussian_match:
+    allocation_vis_enabled = (
+        args.vis_gaussian_allocation_color or args.allocation_statistic)
+    if (args.vis_occ or args.vis_occ_error or args.vis_gaussian or
+            args.vis_gaussian_point or args.vis_gaussian_topdown or
+            args.vis_gaussian_match or allocation_vis_enabled):
         save_dir = os.path.join(args.work_dir, f'vis_ep{args.epoch}')
         os.makedirs(save_dir, exist_ok=True)
     if args.model_type == "base":
@@ -211,121 +478,129 @@ def main(local_rank, args):
     draw_gaussian_params['adaptive_color'] = args.vis_gaussian_adaptive_color
     draw_gaussian_params['adaptive_color_seed'] = args.seed
 
-    with torch.no_grad():
-        for i_iter_val, data in enumerate(val_dataset_loader):
-            
-            for k in list(data.keys()):
-                if isinstance(data[k], torch.Tensor):
-                    data[k] = data[k].cuda()
-            input_imgs = data.pop('img')
-            ori_imgs = data.pop('ori_img')
-            for i in range(ori_imgs.shape[-1]):
-                ori_img = ori_imgs[0, ..., i].cpu().numpy()
-                ori_img = ori_img[..., [2, 1, 0]]
-                ori_img = Image.fromarray(ori_img.astype(np.uint8))
-                ori_img.save(os.path.join(save_dir, f'{i_iter_val}_image_{i}.png'))
-            
-            # breakpoint()
-            result_dict = my_model(imgs=input_imgs, metas=data)
-            if args.vis_gaussian_gt:
-                gaussian_ctr = result_dict['gaussian'].means[0]
-                gt_occ = result_dict['sampled_label'][0]
-                from vis_open3d_voxel import get_grid_coords
-                grids = get_grid_coords([200, 200, 16], [0.4, 0.4, 0.4])
-                grids = torch.tensor(grids, device=gaussian_ctr.device) - torch.tensor([40, 40, 1], device=gaussian_ctr.device)
-                occ_mask = gt_occ < 17
-                gt_grid_occ = grids[occ_mask]
-                cated_points = torch.cat([gaussian_ctr, gt_grid_occ], dim=0)
-                color_gauss  = torch.ones_like(gaussian_ctr, dtype=torch.float32) * torch.tensor([1.0, 1.0, 1.0], device=gt_occ.device)
-                color_gts    = torch.ones_like(gt_grid_occ, dtype=torch.float32) * torch.tensor([0, 1.0, 1.0], device=gt_occ.device)
-                cated_colors = torch.cat([color_gauss, color_gts], dim=0)
+    allocation_collector = AllocationOperationCollector(
+        raw_model,
+        enabled=(local_rank == 0 and allocation_vis_enabled),
+        logger=logger)
 
-                origin_poitns= data['lidar_points'][0][:, :3]
-                origin_mask_x= (origin_poitns[:, 0] > -40) & (origin_poitns[:, 0] < 40)
-                origin_mask_y= (origin_poitns[:, 1] > -40) & (origin_poitns[:, 1] < 40)
-                origin_mask_z= (origin_poitns[:, 2] > -1) & (origin_poitns[:, 2] < 5.4)
-                origin_mask = origin_mask_x & origin_mask_y & origin_mask_z
-                filter_points= origin_poitns[origin_mask]
+    try:
+        with torch.no_grad():
+            for i_iter_val, data in enumerate(val_dataset_loader):
+                allocation_collector.start_iter(i_iter_val, f'val_{i_iter_val}')
 
+                for k in list(data.keys()):
+                    if isinstance(data[k], torch.Tensor):
+                        data[k] = data[k].cuda()
+                input_imgs = data.pop('img')
+                ori_imgs = data.pop('ori_img')
+                for i in range(ori_imgs.shape[-1]):
+                    ori_img = ori_imgs[0, ..., i].cpu().numpy()
+                    ori_img = ori_img[..., [2, 1, 0]]
+                    ori_img = Image.fromarray(ori_img.astype(np.uint8))
+                    ori_img.save(os.path.join(save_dir, f'{i_iter_val}_image_{i}.png'))
 
+                result_dict = my_model(imgs=input_imgs, metas=data)
+                if args.vis_gaussian_gt:
+                    gaussian_ctr = result_dict['gaussian'].means[0]
+                    gt_occ = result_dict['sampled_label'][0]
+                    from vis_open3d_voxel import get_grid_coords
+                    grids = get_grid_coords([200, 200, 16], [0.4, 0.4, 0.4])
+                    grids = torch.tensor(grids, device=gaussian_ctr.device) - torch.tensor([40, 40, 1], device=gaussian_ctr.device)
+                    occ_mask = gt_occ < 17
+                    gt_grid_occ = grids[occ_mask]
+                    cated_points = torch.cat([gaussian_ctr, gt_grid_occ], dim=0)
+                    color_gauss = torch.ones_like(gaussian_ctr, dtype=torch.float32) * torch.tensor([1.0, 1.0, 1.0], device=gt_occ.device)
+                    color_gts = torch.ones_like(gt_grid_occ, dtype=torch.float32) * torch.tensor([0, 1.0, 1.0], device=gt_occ.device)
+                    cated_colors = torch.cat([color_gauss, color_gts], dim=0)
 
-                cated_points = torch.cat([cated_points, filter_points], dim=0)
-                color_points = torch.ones_like(filter_points, dtype=torch.float32) * torch.tensor([1.0, 1.0, 0], device=gt_occ.device)
-                cated_colors = torch.cat([cated_colors, color_points], dim=0)
+                    origin_poitns = data['lidar_points'][0][:, :3]
+                    origin_mask_x = (origin_poitns[:, 0] > -40) & (origin_poitns[:, 0] < 40)
+                    origin_mask_y = (origin_poitns[:, 1] > -40) & (origin_poitns[:, 1] < 40)
+                    origin_mask_z = (origin_poitns[:, 2] > -1) & (origin_poitns[:, 2] < 5.4)
+                    origin_mask = origin_mask_x & origin_mask_y & origin_mask_z
+                    filter_points = origin_poitns[origin_mask]
 
-                from open3d_vis_utils import draw_scenes
-                draw_scenes(points=cated_points.detach().cpu().numpy(), point_colors=cated_colors.detach().cpu().numpy())
-            
-            #import pdb
-            #pdb.set_trace()
-            for idx, pred in enumerate(result_dict['final_occ']):
-                pred_occ = pred
-                gt_occ = result_dict['sampled_label'][idx]
-                occ_shape = [200, 200, 16]
-                if args.vis_gaussian_topdown:
-                    save_gaussian_topdown(
-                        save_dir,
-                        result_dict['anchor_init'],
-                        result_dict['gaussians'],
-                        f'val_{i_iter_val}_topdown'
-                    )
-                if args.vis_occ:
-                    save_occ(
-                        save_dir,
-                        pred_occ.reshape(1, *occ_shape),
-                        f'val_{i_iter_val}_pred',
-                        True, 0, dataset=args.dataset)
-                    save_occ(
-                        save_dir,
-                        gt_occ.reshape(1, *occ_shape),
-                        f'val_{i_iter_val}_gt',
-                        True, 0, dataset=args.dataset)
-                if args.vis_gaussian:
-                    save_gaussian(
-                        save_dir,
-                        result_dict['gaussian'],
-                        f'val_{i_iter_val}_gaussian',
-                        **draw_gaussian_params)
-                if args.vis_gaussian_point:
-                    if save_gaussian_point is None:
-                        raise ImportError('save_gaussian_point 需要 vis_open3d_voxel.py / Open3D 可用')
-                    save_gaussian_point(
-                        save_dir,
-                        result_dict['gaussian'],
-                        f'val_{i_iter_val}_gaussian',
-                        **draw_gaussian_params)
-                if args.vis_gaussian_each_stage:
-                    for gaussian in result_dict['gaussians']:
+                    cated_points = torch.cat([cated_points, filter_points], dim=0)
+                    color_points = torch.ones_like(filter_points, dtype=torch.float32) * torch.tensor([1.0, 1.0, 0], device=gt_occ.device)
+                    cated_colors = torch.cat([cated_colors, color_points], dim=0)
+
+                    from open3d_vis_utils import draw_scenes
+                    draw_scenes(points=cated_points.detach().cpu().numpy(), point_colors=cated_colors.detach().cpu().numpy())
+
+                for idx, pred in enumerate(result_dict['final_occ']):
+                    pred_occ = pred
+                    gt_occ = result_dict['sampled_label'][idx]
+                    occ_shape = [200, 200, 16]
+                    alloc_draw_params = allocation_collector.get_draw_params(
+                        draw_gaussian_params, batch_idx=idx,
+                        enable_color=args.vis_gaussian_allocation_color)
+
+                    if args.vis_gaussian_topdown:
+                        save_gaussian_topdown(
+                            save_dir,
+                            result_dict['anchor_init'],
+                            result_dict['gaussians'],
+                            f'val_{i_iter_val}_topdown'
+                        )
+                    if args.vis_occ:
+                        save_occ(
+                            save_dir,
+                            pred_occ.reshape(1, *occ_shape),
+                            f'val_{i_iter_val}_pred',
+                            True, 0, dataset=args.dataset)
+                        save_occ(
+                            save_dir,
+                            gt_occ.reshape(1, *occ_shape),
+                            f'val_{i_iter_val}_gt',
+                            True, 0, dataset=args.dataset)
+                    if args.vis_gaussian:
                         save_gaussian(
                             save_dir,
-                            gaussian,
+                            result_dict['gaussian'],
                             f'val_{i_iter_val}_gaussian',
-                            **draw_gaussian_params
-                        )
-                # ── 预测错误分类可视化 ──
-                if args.vis_occ_error:
-                    save_occ_error(
-                        save_dir,
-                        pred_occ.reshape(*occ_shape),
-                        gt_occ.reshape(*occ_shape),
-                        f'val_{i_iter_val}',
-                        dataset=args.dataset)
+                            **alloc_draw_params)
+                    if args.vis_gaussian_point:
+                        if save_gaussian_point is None:
+                            raise ImportError('save_gaussian_point 需要 vis_open3d_voxel.py / Open3D 可用')
+                        save_gaussian_point(
+                            save_dir,
+                            result_dict['gaussian'],
+                            f'val_{i_iter_val}_gaussian',
+                            **alloc_draw_params)
+                    if args.vis_gaussian_each_stage:
+                        for gaussian in result_dict['gaussians']:
+                            save_gaussian(
+                                save_dir,
+                                gaussian,
+                                f'val_{i_iter_val}_gaussian',
+                                **alloc_draw_params
+                            )
+                    if args.vis_occ_error:
+                        save_occ_error(
+                            save_dir,
+                            pred_occ.reshape(*occ_shape),
+                            gt_occ.reshape(*occ_shape),
+                            f'val_{i_iter_val}',
+                            dataset=args.dataset)
 
-                # ── 高斯球与GT Occupancy几何匹配可视化 ──
-                if args.vis_gaussian_match:
-                    vis_gaussian_occ_match(
-                        save_dir,
-                        result_dict['gaussian'],
-                        gt_occ.reshape(*occ_shape),
-                        f'val_{i_iter_val}',
-                        dataset=args.dataset,
-                        **draw_gaussian_params)
+                    if args.vis_gaussian_match:
+                        vis_gaussian_occ_match(
+                            save_dir,
+                            result_dict['gaussian'],
+                            gt_occ.reshape(*occ_shape),
+                            f'val_{i_iter_val}',
+                            dataset=args.dataset,
+                            **draw_gaussian_params)
 
-                miou_metric._after_step(pred_occ, gt_occ)
-            
-            if i_iter_val % print_freq == 0 and local_rank == 0:
-                logger.info('[EVAL] Iter %5d'%(i_iter_val))
-                    
+                    miou_metric._after_step(pred_occ, gt_occ)
+
+                if i_iter_val % print_freq == 0 and local_rank == 0:
+                    logger.info('[EVAL] Iter %5d'%(i_iter_val))
+    finally:
+        if local_rank == 0 and allocation_vis_enabled:
+            allocation_collector.dump(os.path.join(save_dir, 'allocation_stats'))
+        allocation_collector.close()
+
     miou, iou2 = miou_metric._after_epoch()
     logger.info(f'mIoU: {miou}, iou2: {iou2}')
     miou_metric.reset()
@@ -535,6 +810,12 @@ def main_stream(local_rank, args):
 
     current_scene = None
     total_frames = 0
+    allocation_vis_enabled = (
+        args.vis_gaussian_allocation_color or args.allocation_statistic)
+    allocation_collector = AllocationOperationCollector(
+        raw_model,
+        enabled=(local_rank == 0 and allocation_vis_enabled),
+        logger=logger)
 
     with torch.no_grad():
         for i_iter_val, data in enumerate(val_dataset_loader):
@@ -544,6 +825,8 @@ def main_stream(local_rank, args):
             frame_in_scene = data.get('frame_index_in_scene', [0])[0]
             is_first = data.get('is_first_frame', [False])[0]
             is_last = data.get('is_last_frame', [False])[0]
+            allocation_collector.start_iter(
+                i_iter_val, f'{scene_token}_frame_{frame_in_scene:04d}')
 
             # ── 场景切换检测 ──
             if scene_token != current_scene:
@@ -752,6 +1035,9 @@ def main_stream(local_rank, args):
                 pred_occ = pred_occ_for_metric[idx]
                 gt_occ = result_dict['sampled_label'][idx]
                 occ_shape = [_H, _W, _D]
+                alloc_draw_params = allocation_collector.get_draw_params(
+                    draw_gaussian_params, batch_idx=idx,
+                    enable_color=args.vis_gaussian_allocation_color)
 
                 # 指标
                 occ_mask = result_dict.get(
@@ -805,7 +1091,7 @@ def main_stream(local_rank, args):
                         scene_vis_dir,
                         result_dict['gaussian'],
                         f'{frame_tag}_gaussian',
-                        **draw_gaussian_params)
+                        **alloc_draw_params)
                 if args.vis_gaussian_point:
                     if save_gaussian_point is None:
                         raise ImportError('save_gaussian_point 需要 vis_open3d_voxel.py / Open3D 可用')
@@ -813,7 +1099,7 @@ def main_stream(local_rank, args):
                         scene_vis_dir,
                         result_dict['gaussian'],
                         f'{frame_tag}_gaussian',
-                        **draw_gaussian_params)
+                        **alloc_draw_params)
 
                 # Gaussian FIFO 融合后的高斯可视化
                 if args.vis_gaussian and merged_gaussian_list[idx] is not None:
@@ -850,7 +1136,7 @@ def main_stream(local_rank, args):
                             scene_vis_dir,
                             gaussian,
                             f'{frame_tag}_gaussian_stage{stage_i}',
-                            **draw_gaussian_params)
+                            **alloc_draw_params)
 
             # ── 日志 ──
             if i_iter_val % print_freq == 0 and local_rank == 0:
@@ -948,6 +1234,10 @@ def main_stream(local_rank, args):
             json.dump(eval_results, f, indent=2)
         logger.info(f'Stream vis results saved to: {save_path}')
 
+    if local_rank == 0 and allocation_vis_enabled:
+        allocation_collector.dump(osp.join(stream_vis_root, 'allocation_stats'))
+    allocation_collector.close()
+
     if writer is not None:
         writer.close()
 
@@ -965,6 +1255,10 @@ if __name__ == '__main__':
                         help='使用点云形式可视化 Semantic Gaussian')
     parser.add_argument('--vis-gaussian-adaptive-color', action='store_true', default=False,
                         help='根据 Gaussian opacity 自适应选择红/蓝/灰颜色')
+    parser.add_argument('--vis-gaussian-allocation-color', action='store_true', default=False,
+                        help='根据 AdaptiveAllocationV4 的 keep/clone/split/attenuation 操作着色')
+    parser.add_argument('--allocation-statistic', action='store_true', default=False,
+                        help='统计 AdaptiveAllocationV4 的 keep/clone/split/attenuation 操作分布')
     parser.add_argument('--vis_gaussian_topdown', action='store_true', default=False)
     parser.add_argument('--vis-index', type=int, nargs='+', default=[])
     parser.add_argument('--num-samples', type=int, default=1)

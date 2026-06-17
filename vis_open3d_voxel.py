@@ -1073,7 +1073,9 @@ def create_ellipsoid(center, radii, rotation, color, opacity=1.0, resolution=4):
 def save_gaussian(
         save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False,
         filter_zsize=False, show_window=True, max_gaussians=25600,
-        adaptive_color=False, adaptive_color_seed=42):
+        adaptive_color=False, adaptive_color_seed=42,
+        allocation_color=False, allocation_op_ids=None,
+        allocation_color_map=None):
     print(f"[save_gaussian] 开始处理 {name}")
 
     empty_label = 17
@@ -1102,8 +1104,16 @@ def save_gaussian(
     else:
         pred = np.ones(len(means)) if len(means) > 0 else np.array([])
 
+    allocation_ids = None
+    if allocation_color and allocation_op_ids is not None:
+        allocation_ids = np.asarray(allocation_op_ids).reshape(-1)
+        if len(allocation_ids) != len(means):
+            print(
+                f"⚠ allocation_op_ids 数量({len(allocation_ids)})与高斯数量({len(means)})不一致，关闭操作着色")
+            allocation_ids = None
+
     # 过滤条件
-    if ignore_opa and not adaptive_color:
+    if ignore_opa and not adaptive_color and allocation_ids is None:
         opas[:] = 1.
     mask = (pred != empty_label)
 
@@ -1125,6 +1135,8 @@ def save_gaussian(
         rotations = rotations[mask]
         opas = opas[mask]
         pred = pred[mask]
+        if allocation_ids is not None:
+            allocation_ids = allocation_ids[mask]
 
     print(f"[save_gaussian] 有效高斯点数量: {len(means)}")
     if len(means) == 0:
@@ -1132,7 +1144,18 @@ def save_gaussian(
         return
 
     adaptive_colors = None
-    if adaptive_color:
+    allocation_colors = None
+    if allocation_ids is not None:
+        cmap = allocation_color_map or {
+            0: [0.55, 0.55, 0.55],
+            1: [0.10, 0.35, 1.00],
+            2: [1.00, 0.10, 0.10],
+            3: [1.00, 0.85, 0.05],
+        }
+        allocation_colors = np.array(
+            [cmap.get(int(op_id), [1.0, 1.0, 1.0]) for op_id in allocation_ids],
+            dtype=np.float32)
+    elif adaptive_color:
         adaptive_colors = get_adaptive_gaussian_colors(
             pred, scales, opas, seed=adaptive_color_seed)
 
@@ -1153,14 +1176,18 @@ def save_gaussian(
         radii = scales[idx] * scalar
         rot_matrix = Quaternion(rotations[idx]).rotation_matrix
 
-        if adaptive_colors is not None:
+        if allocation_colors is not None:
+            base_color = allocation_colors[idx].copy()
+        elif adaptive_colors is not None:
             base_color = adaptive_colors[idx].copy()
         else:
             base_color = sem_cmap[pred[idx]][:3].copy()
         if np.allclose(base_color, [1.0, 1.0, 1.0], atol=0.1):
             continue
 
-        if adaptive_colors is not None:
+        if allocation_colors is not None:
+            color = base_color
+        elif adaptive_colors is not None:
             color = base_color
         else:
             # 根据不透明度混入白色背景：透明度越低 → 越接近白色
@@ -1272,7 +1299,9 @@ def generate_sphere_points(resolution=3):
 def save_gaussian_point(
         save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False,
         filter_zsize=False, show_window=True, max_gaussians=25600,
-        adaptive_color=False, adaptive_color_seed=42):
+        adaptive_color=False, adaptive_color_seed=42,
+        allocation_color=False, allocation_op_ids=None,
+        allocation_color_map=None):
     """使用Open3D点云的高斯分布3D可视化 - 优化内存版本（每个高斯球用27个点表示形状）"""
     print(f"[save_gaussian_point] 开始处理 {name}")
     
@@ -1315,11 +1344,19 @@ def save_gaussian_point(
     else:
         pred = np.ones(len(means)) if len(means) > 0 else np.array([])
 
+    allocation_ids = None
+    if allocation_color and allocation_op_ids is not None:
+        allocation_ids = np.asarray(allocation_op_ids).reshape(-1)
+        if len(allocation_ids) != len(means):
+            print(
+                f"⚠ allocation_op_ids 数量({len(allocation_ids)})与高斯数量({len(means)})不一致，关闭操作着色")
+            allocation_ids = None
+
     # 过滤条件
-    if ignore_opa and not adaptive_color:
+    if ignore_opa and not adaptive_color and allocation_ids is None:
         opas[:] = 1.
         mask = (pred != empty_label)
-    elif adaptive_color:
+    elif adaptive_color or allocation_ids is not None:
         mask = (pred != empty_label)
     else:
         mask = (pred != empty_label) & (opas > 0.1)
@@ -1343,6 +1380,8 @@ def save_gaussian_point(
         rotations = rotations[mask]
         opas = opas[mask]
         pred = pred[mask]
+        if allocation_ids is not None:
+            allocation_ids = allocation_ids[mask]
 
     print(f"[save_gaussian_point] 有效高斯点数量: {len(means)}")
 
@@ -1359,9 +1398,22 @@ def save_gaussian_point(
         rotations = rotations[indices]
         opas = opas[indices]
         pred = pred[indices]
+        if allocation_ids is not None:
+            allocation_ids = allocation_ids[indices]
 
     adaptive_colors = None
-    if adaptive_color:
+    allocation_colors = None
+    if allocation_ids is not None:
+        cmap = allocation_color_map or {
+            0: [0.55, 0.55, 0.55],
+            1: [0.10, 0.35, 1.00],
+            2: [1.00, 0.10, 0.10],
+            3: [1.00, 0.85, 0.05],
+        }
+        allocation_colors = np.array(
+            [cmap.get(int(op_id), [1.0, 1.0, 1.0]) for op_id in allocation_ids],
+            dtype=np.float32)
+    elif adaptive_color:
         adaptive_colors = get_adaptive_gaussian_colors(
             pred, scales, opas, seed=adaptive_color_seed)
 
@@ -1389,7 +1441,9 @@ def save_gaussian_point(
             rot_matrix = Quaternion(rotations[idx]).rotation_matrix
             
             # 获取基础颜色
-            if adaptive_colors is not None:
+            if allocation_colors is not None:
+                base_color = allocation_colors[idx].copy()
+            elif adaptive_colors is not None:
                 base_color = adaptive_colors[idx].copy()
             elif len(pred) > idx:
                 base_color = sem_cmap[pred[idx]][:3].copy()  # 只取RGB
@@ -1400,7 +1454,9 @@ def save_gaussian_point(
             if np.allclose(base_color, [1.0, 1.0, 1.0], atol=0.1):
                 continue
             
-            if adaptive_colors is not None:
+            if allocation_colors is not None:
+                color = base_color
+            elif adaptive_colors is not None:
                 color = base_color
             else:
                 # 根据不透明度混入白色背景：透明度越低 → 越接近白色

@@ -345,7 +345,9 @@ def get_nuscenes_colormap():
 
 def save_gaussian(
         save_dir, gaussian, name, scalar=1.5, ignore_opa=False,
-        filter_zsize=False, adaptive_color=False, adaptive_color_seed=42):
+        filter_zsize=False, adaptive_color=False, adaptive_color_seed=42,
+        allocation_color=False, allocation_op_ids=None,
+        allocation_color_map=None):
 
     empty_label = 17
     sem_cmap = get_nuscenes_colormap()
@@ -362,10 +364,18 @@ def save_gaussian(
     sems = gaussian.semantics[0].detach().cpu().numpy() # g, 18
     pred = np.argmax(sems, axis=-1)
 
-    if ignore_opa and not adaptive_color:
+    allocation_ids = None
+    if allocation_color and allocation_op_ids is not None:
+        allocation_ids = np.asarray(allocation_op_ids).reshape(-1)
+        if len(allocation_ids) != len(means):
+            print(
+                f"⚠ allocation_op_ids 数量({len(allocation_ids)})与高斯数量({len(means)})不一致，关闭操作着色")
+            allocation_ids = None
+
+    if ignore_opa and not adaptive_color and allocation_ids is None:
         opas[:] = 1.
         mask = (pred != empty_label)
-    elif adaptive_color:
+    elif adaptive_color or allocation_ids is not None:
         mask = (pred != empty_label)
     else:
         mask = (pred != empty_label) & (opas > 0.75)
@@ -388,9 +398,22 @@ def save_gaussian(
     rotations = rotations[mask]
     opas = opas[mask]
     pred = pred[mask]
+    if allocation_ids is not None:
+        allocation_ids = allocation_ids[mask]
 
     adaptive_colors = None
-    if adaptive_color:
+    allocation_colors = None
+    if allocation_ids is not None:
+        cmap = allocation_color_map or {
+            0: [0.55, 0.55, 0.55],
+            1: [0.10, 0.35, 1.00],
+            2: [1.00, 0.10, 0.10],
+            3: [1.00, 0.85, 0.05],
+        }
+        allocation_colors = np.array(
+            [cmap.get(int(op_id), [1.0, 1.0, 1.0]) for op_id in allocation_ids],
+            dtype=np.float32)
+    elif adaptive_color:
         adaptive_colors = get_adaptive_gaussian_colors(
             pred, scales, opas, seed=adaptive_color_seed)
 
@@ -436,7 +459,10 @@ def save_gaussian(
 
         xyz = xyz + center[None, None, ...]
 
-        if adaptive_colors is not None:
+        if allocation_colors is not None:
+            face_color = allocation_colors[indx]
+            face_alpha = 1.0
+        elif adaptive_colors is not None:
             face_color = adaptive_colors[indx]
             face_alpha = 1.0
         else:
