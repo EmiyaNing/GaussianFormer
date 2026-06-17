@@ -254,7 +254,7 @@ class AllocationOperationCollector:
         n = int(round(width * value / total))
         return '#' * n + '.' * (width - n)
 
-    def dump_frame(self, save_dir, batch_idx=0, frame_name=None):
+    def dump_frame(self, save_dir, batch_idx=0, frame_name=None, print_to_terminal=True):
         if not self.enabled or self.latest_record is None:
             return
         per_batch = self.latest_record.get('per_batch', [])
@@ -305,6 +305,22 @@ class AllocationOperationCollector:
             f.write('| --- | ---: | --- |\n')
             for label, value in bars:
                 f.write(f"| {label} | {value} | `{self._bar(value, total)}` |\n")
+
+        if print_to_terminal:
+            ratios = item['ratios']
+            msg = (
+                f"[AllocationStatistic][Frame {tag}][batch {batch_idx}] "
+                f"keep={item['keep_total']} ({ratios['keep_total']:.2%}), "
+                f"clone={item['clone']} ({ratios['clone']:.2%}), "
+                f"split={item['split']} ({ratios['split']:.2%}), "
+                f"opacity_attenuation={item['opacity_attenuation']} "
+                f"({ratios['opacity_attenuation']:.2%}), "
+                f"input={item['input_gaussians']}, "
+                f"expected_output={item['expected_output_gaussians']}"
+            )
+            print(msg)
+            if self.logger is not None:
+                self.logger.info(msg)
 
     def close(self):
         for handle in self._handles:
