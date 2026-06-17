@@ -228,6 +228,84 @@ class AllocationOperationCollector:
             })
         return params
 
+    @staticmethod
+    def _safe_name(name):
+        return ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in str(name))
+
+    @staticmethod
+    def _item_with_ratios(item):
+        output = dict(item)
+        total = max(output['input_gaussians'], 1)
+        output['ratios'] = {
+            'keep_total': output['keep_total'] / total,
+            'keep_from_non_topk': output['keep_from_non_topk'] / total,
+            'keep_from_router': output['keep_from_router'] / total,
+            'clone': output['clone'] / total,
+            'split': output['split'] / total,
+            'opacity_attenuation': output['opacity_attenuation'] / total,
+            'expected_output_gaussians': output['expected_output_gaussians'] / total,
+        }
+        return output
+
+    @staticmethod
+    def _bar(value, total, width=32):
+        if total <= 0:
+            return ''
+        n = int(round(width * value / total))
+        return '#' * n + '.' * (width - n)
+
+    def dump_frame(self, save_dir, batch_idx=0, frame_name=None):
+        if not self.enabled or self.latest_record is None:
+            return
+        per_batch = self.latest_record.get('per_batch', [])
+        if batch_idx >= len(per_batch):
+            return
+
+        os.makedirs(save_dir, exist_ok=True)
+        tag = frame_name or self.latest_record.get('tag') or f"iter_{self.latest_record.get('iter')}"
+        name = self._safe_name(f'{tag}_batch{batch_idx}')
+        item = self._item_with_ratios(per_batch[batch_idx])
+        payload = {
+            'iter': self.latest_record.get('iter'),
+            'tag': self.latest_record.get('tag'),
+            'module': self.latest_record.get('module'),
+            'batch_index': batch_idx,
+            'stats': item,
+        }
+
+        json_path = os.path.join(save_dir, f'{name}.json')
+        with open(json_path, 'w') as f:
+            json.dump(payload, f, indent=2)
+
+        md_path = os.path.join(save_dir, f'{name}.md')
+        total = item['input_gaussians']
+        bars = [
+            ('keep', item['keep_total']),
+            ('clone', item['clone']),
+            ('split', item['split']),
+            ('atten', item['opacity_attenuation']),
+        ]
+        with open(md_path, 'w') as f:
+            f.write(f"# Allocation Operation Frame Report\n\n")
+            f.write(f"- frame: `{tag}`\n")
+            f.write(f"- module: `{self.latest_record.get('module')}`\n")
+            f.write(f"- batch: `{batch_idx}`\n\n")
+            f.write('| Metric | Count | Ratio |\n')
+            f.write('| --- | ---: | ---: |\n')
+            for key in (
+                'input_gaussians', 'selected_topk', 'keep_total',
+                'keep_from_non_topk', 'keep_from_router', 'clone', 'split',
+                'opacity_attenuation', 'expected_output_gaussians',
+                'padded_output_gaussians',
+            ):
+                ratio = '-' if key not in item['ratios'] else f"{item['ratios'][key]:.6f}"
+                f.write(f"| {key} | {item[key]} | {ratio} |\n")
+            f.write('\n## Operation Bars\n\n')
+            f.write('| Operation | Count | Bar |\n')
+            f.write('| --- | ---: | --- |\n')
+            for label, value in bars:
+                f.write(f"| {label} | {value} | `{self._bar(value, total)}` |\n")
+
     def close(self):
         for handle in self._handles:
             handle.remove()
@@ -593,6 +671,11 @@ def main(local_rank, args):
                             **draw_gaussian_params)
 
                     miou_metric._after_step(pred_occ, gt_occ)
+                    if local_rank == 0 and allocation_vis_enabled:
+                        allocation_collector.dump_frame(
+                            os.path.join(save_dir, 'allocation_stats', 'per_frame'),
+                            batch_idx=idx,
+                            frame_name=f'val_{i_iter_val}')
 
                 if i_iter_val % print_freq == 0 and local_rank == 0:
                     logger.info('[EVAL] Iter %5d'%(i_iter_val))
@@ -1137,6 +1220,12 @@ def main_stream(local_rank, args):
                             gaussian,
                             f'{frame_tag}_gaussian_stage{stage_i}',
                             **alloc_draw_params)
+
+                if allocation_vis_enabled:
+                    allocation_collector.dump_frame(
+                        osp.join(stream_vis_root, 'allocation_stats', 'per_frame'),
+                        batch_idx=idx,
+                        frame_name=f'{scene_token}_{frame_tag}')
 
             # ── 日志 ──
             if i_iter_val % print_freq == 0 and local_rank == 0:
