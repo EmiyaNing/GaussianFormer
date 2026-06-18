@@ -15,3 +15,4 @@ from .ball_query_crossattn import BallQueryCrossAttn
 from .history_cross_attn import HistoryCrossAttention
 from .topk_module.adaptive_allocation import AdaptiveAllocation
 from .topk_module.adaptive_allocationv4 import AdaptiveAllocationV4
+from .topk_module.adaptive_allocationv5 import AdaptiveAllocationV5

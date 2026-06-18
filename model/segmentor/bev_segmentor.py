@@ -13,6 +13,9 @@ class BEVSegmentor(CustomBaseSegmentor):
         freeze_img_backbone=False,
         freeze_img_neck=False,
         freeze_lifter=False,
+        freeze_gaussian_head=False,
+        freeze_encoder_except_densify=False,
+        freeze_encoder_anchor_encoder=False,
         img_backbone_out_indices=[1, 2, 3],
         extra_img_backbone=None,
         # use_post_fusion=False,
@@ -23,6 +26,9 @@ class BEVSegmentor(CustomBaseSegmentor):
         # self.fp16_enabled = False
         self.freeze_img_backbone = freeze_img_backbone
         self.freeze_img_neck = freeze_img_neck
+        self.freeze_gaussian_head = freeze_gaussian_head
+        self.freeze_encoder_except_densify = freeze_encoder_except_densify
+        self.freeze_encoder_anchor_encoder = freeze_encoder_anchor_encoder
         self.img_backbone_out_indices = img_backbone_out_indices
         # self.use_post_fusion = use_post_fusion
 
@@ -34,8 +40,27 @@ class BEVSegmentor(CustomBaseSegmentor):
             self.lifter.requires_grad_(False)
             if hasattr(self.lifter, "random_anchors"):
                 self.lifter.random_anchors.requires_grad = True
+        if freeze_gaussian_head:
+            self.head.requires_grad_(False)
+        if freeze_encoder_except_densify:
+            self._freeze_encoder_except_densify(
+                freeze_anchor_encoder=freeze_encoder_anchor_encoder)
         if extra_img_backbone is not None:
             self.extra_img_backbone = build_backbone(extra_img_backbone)
+
+    def _freeze_encoder_except_densify(self, freeze_anchor_encoder=False):
+        if freeze_anchor_encoder and hasattr(self.encoder, "anchor_encoder"):
+            self.encoder.anchor_encoder.requires_grad_(False)
+
+        operation_order = getattr(self.encoder, "operation_order", None)
+        layers = getattr(self.encoder, "layers", None)
+        if operation_order is None or layers is None:
+            return
+
+        for op, layer in zip(operation_order, layers):
+            if layer is None:
+                continue
+            layer.requires_grad_(op == "densify")
 
     def extract_img_feat(self, imgs, **kwargs):
         """Extract features of images."""

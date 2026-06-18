@@ -21,11 +21,13 @@ class GaussianHeadSemantic(BaseTaskHead):
         use_localaggprob=False,
         use_localaggprob_fast=False,
         combine_geosem=False,
+        gaussian_scale_min=0.08,
         **kwargs,
     ):
         super().__init__(init_cfg)
         
         self.num_classes = num_classes
+        self.gaussian_scale_min = gaussian_scale_min
         self.use_localaggprob = use_localaggprob
         if use_localaggprob:
             if use_localaggprob_fast:
@@ -108,6 +110,37 @@ class GaussianHeadSemantic(BaseTaskHead):
             else:
                 opacities = torch.cat([opacities, torch.zeros_like(opacities[..., :1])], dim=-1)
 
+        scales = torch.where(
+            torch.isfinite(scales),
+            scales,
+            torch.full_like(scales, self.gaussian_scale_min),
+        )
+        scales = scales.clamp_min(self.gaussian_scale_min)
+        opacities = torch.where(
+            torch.isfinite(opacities),
+            opacities,
+            torch.zeros_like(opacities),
+        )
+        opacities = opacities.clamp(min=-30.0, max=30.0)
+        origi_opa = torch.where(
+            torch.isfinite(origi_opa),
+            origi_opa,
+            torch.zeros_like(origi_opa),
+        )
+        origi_opa = origi_opa.clamp(min=0.0, max=1.0)
+        rotations = torch.where(
+            torch.isfinite(rotations),
+            rotations,
+            torch.zeros_like(rotations),
+        )
+        rot_norm = rotations.norm(dim=-1, keepdim=True)
+        rotations = rotations / rot_norm.clamp_min(1e-8)
+        bad_rot = rot_norm.squeeze(-1) < 1e-8
+        if bad_rot.any():
+            identity_rot = torch.zeros_like(rotations)
+            identity_rot[..., 0] = 1.0
+            rotations = torch.where(bad_rot.unsqueeze(-1), identity_rot, rotations)
+
         bs, g, _ = means.shape
         S = torch.zeros(bs, g, 3, 3, dtype=means.dtype, device=means.device)
         S[..., 0, 0] = scales[..., 0]
@@ -116,7 +149,10 @@ class GaussianHeadSemantic(BaseTaskHead):
         R = get_rotation_matrix(rotations) # b, g, 3, 3
         M = torch.matmul(S, R)
         Cov = torch.matmul(M.transpose(-1, -2), M)
-        CovInv = Cov.cpu().inverse().cuda() # b, g, 3, 3
+        Cov = torch.where(torch.isfinite(Cov), Cov, torch.zeros_like(Cov))
+        eye = torch.eye(3, dtype=Cov.dtype, device=Cov.device).view(1, 1, 3, 3)
+        Cov = Cov + eye * 1e-6
+        CovInv = torch.linalg.inv(Cov.cpu()).to(Cov.device) # b, g, 3, 3
         return means, origi_opa, opacities, scales, CovInv
 
     def forward(
@@ -217,4 +253,3 @@ class GaussianHeadSemantic(BaseTaskHead):
             'gaussian_sem_preds': opacities,
             'gaussians': [r['gaussian'] for r in representation]
         }
-
