@@ -37,22 +37,24 @@ def pass_print(*args, **kwargs):
 
 
 ALLOCATION_OP_NAMES = {
-    0: 'keep',
-    1: 'clone',
-    2: 'split',
-    3: 'opacity_attenuation',
+    0: 'pass_through',
+    1: 'clone_parent',
+    2: 'clone_child',
+    3: 'split_child',
+    4: 'opacity_attenuation',
 }
 
 ALLOCATION_COLOR_MAP = {
     0: [0.55, 0.55, 0.55],
-    1: [0.10, 0.35, 1.00],
-    2: [1.00, 0.10, 0.10],
-    3: [1.00, 0.85, 0.05],
+    1: [0.05, 0.20, 0.95],
+    2: [0.15, 0.65, 1.00],
+    3: [1.00, 0.10, 0.10],
+    4: [1.00, 0.85, 0.05],
 }
 
 
 class AllocationOperationCollector:
-    """Runtime wrapper collector for AdaptiveAllocationV4 visualization."""
+    """Runtime collector for AdaptiveAllocationV5 visualization."""
 
     def __init__(self, model, enabled=False, logger=None):
         self.enabled = enabled
@@ -72,13 +74,20 @@ class AllocationOperationCollector:
         return {
             'input_gaussians': 0,
             'selected_topk': 0,
-            'keep_total': 0,
-            'keep_from_non_topk': 0,
-            'keep_from_router': 0,
-            'clone': 0,
-            'split': 0,
+            'non_topk_pass_through': 0,
+            'clone_parent': 0,
+            'clone_child': 0,
+            'split_child': 0,
             'opacity_attenuation': 0,
-            'expected_output_gaussians': 0,
+            'output_candidate_count': 0,
+            'expected_clone': 0.0,
+            'expected_split': 0.0,
+            'expected_atten': 0.0,
+            'effective_opacity_clone_parent': 0.0,
+            'effective_opacity_clone_child': 0.0,
+            'effective_opacity_split_child_1': 0.0,
+            'effective_opacity_split_child_2': 0.0,
+            'effective_opacity_atten': 0.0,
             'num_forwards': 0,
             'num_batch_items': 0,
         }
@@ -87,96 +96,112 @@ class AllocationOperationCollector:
         modules = [
             (name, module)
             for name, module in model.named_modules()
-            if module.__class__.__name__ == 'AdaptiveAllocationV4'
+            if module.__class__.__name__ == 'AdaptiveAllocationV5'
         ]
         if len(modules) == 0:
             self.enabled = False
             if self.logger is not None:
                 self.logger.warning(
-                    '[AllocationStatistic] AdaptiveAllocationV4 not found; disabled.')
+                    '[AllocationStatistic] AdaptiveAllocationV5 not found; disabled.')
             return
 
         for name, module in modules:
-            original_routing = module.compute_operation_routing
-
-            def wrapped_routing(h, selected_mask, _orig=original_routing, _module=module):
-                result = _orig(h, selected_mask)
-                _module._allocation_route_cache = {
-                    'selected_mask': selected_mask.detach(),
-                    'op_id': result[3].detach(),
-                }
-                return result
-
-            module.compute_operation_routing = wrapped_routing
-            self._original_methods.append((module, original_routing))
             self._handles.append(module.register_forward_hook(self._make_forward_hook(name)))
 
         if self.logger is not None:
             self.logger.info(
-                f'[AllocationStatistic] enabled on {len(modules)} AdaptiveAllocationV4 module(s).')
+                f'[AllocationStatistic] enabled on {len(modules)} AdaptiveAllocationV5 module(s).')
 
     def _make_forward_hook(self, module_name):
         def hook(module, inputs, output):
             if not self.enabled:
                 return
-            route = getattr(module, '_allocation_route_cache', None)
-            if route is None:
+            labels = getattr(module, 'latest_output_candidate_labels', None)
+            stats = getattr(module, 'latest_risky_operation_stats', None)
+            selected_mask = getattr(module, 'latest_selected_mask', None)
+            risky_prob = getattr(module, 'latest_risky_operation_prob', None)
+            if labels is None:
                 return
-            op_id = route['op_id']
-            selected_mask = route['selected_mask']
             if output is None or len(output) < 3:
                 return
             output_size = int(output[2].shape[1])
             record = self._build_record(
-                module_name, op_id, selected_mask, output_size)
+                module_name, labels, stats, selected_mask, risky_prob, output_size)
             self.latest_record = record
             self.records.append(record)
             self._accumulate(record)
-            module._allocation_route_cache = None
         return hook
 
-    def _build_record(self, module_name, op_id, selected_mask, output_size):
-        op_id_cpu = op_id.detach().to('cpu')
-        selected_cpu = selected_mask.detach().to('cpu')
+    @staticmethod
+    def _stats_item(stats, batch_idx):
+        if isinstance(stats, (list, tuple)) and batch_idx < len(stats):
+            return stats[batch_idx] or {}
+        return {}
+
+    def _build_record(
+            self, module_name, labels, stats, selected_mask, risky_prob,
+            output_size):
+        labels_cpu = labels.detach().to('cpu').long()
+        selected_cpu = selected_mask.detach().to('cpu') if selected_mask is not None else None
+        risky_prob_cpu = risky_prob.detach().to('cpu') if risky_prob is not None else None
         per_batch = []
         output_ids = []
 
-        for b in range(op_id_cpu.shape[0]):
-            cur_op = op_id_cpu[b].to(torch.long)
-            cur_selected = selected_cpu[b].to(torch.bool)
-            n = int(cur_op.numel())
-            keep_mask = cur_op == 0
-            clone_mask = cur_op == 1
-            split_mask = cur_op == 2
-            atten_mask = cur_op == 3
-            non_topk_keep = keep_mask & (~cur_selected)
-            routed_keep = keep_mask & cur_selected
-
-            clone_count = int(clone_mask.sum().item())
-            split_count = int(split_mask.sum().item())
-            expected_output = n + clone_count + split_count
-
+        for b in range(labels_cpu.shape[0]):
+            cur_label = labels_cpu[b].reshape(-1)
             out = torch.full((output_size,), -1, dtype=torch.long)
-            out[:n] = cur_op
-            cursor = n
-            if clone_count > 0:
-                out[cursor:cursor + clone_count] = 1
-                cursor += clone_count
-            if split_count > 0:
-                out[cursor:cursor + split_count] = 2
+            copy_count = min(output_size, int(cur_label.numel()))
+            if copy_count > 0:
+                out[:copy_count] = cur_label[:copy_count]
+
+            pass_mask = out == 0
+            clone_parent_mask = out == 1
+            clone_child_mask = out == 2
+            split_child_mask = out == 3
+            atten_mask = out == 4
+
+            stat = self._stats_item(stats, b)
+            selected_topk = int(stat.get(
+                'selected_topk',
+                int(selected_cpu[b].sum().item()) if selected_cpu is not None else 0))
+            input_gaussians = int(stat.get('input_gaussians', 0))
+            if input_gaussians <= 0:
+                input_gaussians = int(pass_mask.sum().item()) + selected_topk
+            output_count = int(stat.get('output_candidate_count', int((out >= 0).sum().item())))
+
+            p_clone_mean = float(stat.get('topk_p_clone_mean', 0.0))
+            p_split_mean = float(stat.get('topk_p_split_mean', 0.0))
+            p_atten_mean = float(stat.get('topk_p_atten_mean', 0.0))
+            if risky_prob_cpu is not None and selected_cpu is not None:
+                cur_selected = selected_cpu[b].to(torch.bool)
+                if cur_selected.any():
+                    cur_prob = risky_prob_cpu[b][cur_selected]
+                    p_clone_mean = float(cur_prob[:, 0].mean().item())
+                    p_split_mean = float(cur_prob[:, 1].mean().item())
+                    p_atten_mean = float(cur_prob[:, 2].mean().item())
 
             item = {
                 'batch_index': b,
-                'input_gaussians': n,
-                'selected_topk': int(cur_selected.sum().item()),
-                'keep_total': int(keep_mask.sum().item()),
-                'keep_from_non_topk': int(non_topk_keep.sum().item()),
-                'keep_from_router': int(routed_keep.sum().item()),
-                'clone': clone_count,
-                'split': split_count,
+                'input_gaussians': input_gaussians,
+                'selected_topk': selected_topk,
+                'non_topk_pass_through': int(pass_mask.sum().item()),
+                'clone_parent': int(clone_parent_mask.sum().item()),
+                'clone_child': int(clone_child_mask.sum().item()),
+                'split_child': int(split_child_mask.sum().item()),
                 'opacity_attenuation': int(atten_mask.sum().item()),
-                'expected_output_gaussians': expected_output,
-                'padded_output_gaussians': output_size,
+                'output_candidate_count': output_count,
+                'padded_output_gaussians': int(output_size),
+                'expected_clone': float(stat.get('expected_clone', 0.0)),
+                'expected_split': float(stat.get('expected_split', 0.0)),
+                'expected_atten': float(stat.get('expected_atten', 0.0)),
+                'topk_p_clone_mean': p_clone_mean,
+                'topk_p_split_mean': p_split_mean,
+                'topk_p_atten_mean': p_atten_mean,
+                'effective_opacity_clone_parent': float(stat.get('effective_opacity_clone_parent', 0.0)),
+                'effective_opacity_clone_child': float(stat.get('effective_opacity_clone_child', 0.0)),
+                'effective_opacity_split_child_1': float(stat.get('effective_opacity_split_child_1', 0.0)),
+                'effective_opacity_split_child_2': float(stat.get('effective_opacity_split_child_2', 0.0)),
+                'effective_opacity_atten': float(stat.get('effective_opacity_atten', 0.0)),
             }
             per_batch.append(item)
             output_ids.append(out)
@@ -194,9 +219,15 @@ class AllocationOperationCollector:
         for item in record['per_batch']:
             self.summary['num_batch_items'] += 1
             for key in (
-                'input_gaussians', 'selected_topk', 'keep_total',
-                'keep_from_non_topk', 'keep_from_router', 'clone', 'split',
-                'opacity_attenuation', 'expected_output_gaussians',
+                'input_gaussians', 'selected_topk', 'non_topk_pass_through',
+                'clone_parent', 'clone_child', 'split_child',
+                'opacity_attenuation', 'output_candidate_count',
+                'expected_clone', 'expected_split', 'expected_atten',
+                'effective_opacity_clone_parent',
+                'effective_opacity_clone_child',
+                'effective_opacity_split_child_1',
+                'effective_opacity_split_child_2',
+                'effective_opacity_atten',
             ):
                 self.summary[key] += item[key]
 
@@ -235,15 +266,20 @@ class AllocationOperationCollector:
     @staticmethod
     def _item_with_ratios(item):
         output = dict(item)
-        total = max(output['input_gaussians'], 1)
+        input_total = max(output['input_gaussians'], 1)
+        output_total = max(output['output_candidate_count'], 1)
+        topk_total = max(output['selected_topk'], 1)
         output['ratios'] = {
-            'keep_total': output['keep_total'] / total,
-            'keep_from_non_topk': output['keep_from_non_topk'] / total,
-            'keep_from_router': output['keep_from_router'] / total,
-            'clone': output['clone'] / total,
-            'split': output['split'] / total,
-            'opacity_attenuation': output['opacity_attenuation'] / total,
-            'expected_output_gaussians': output['expected_output_gaussians'] / total,
+            'selected_topk': output['selected_topk'] / input_total,
+            'non_topk_pass_through': output['non_topk_pass_through'] / input_total,
+            'clone_parent': output['clone_parent'] / output_total,
+            'clone_child': output['clone_child'] / output_total,
+            'split_child': output['split_child'] / output_total,
+            'opacity_attenuation': output['opacity_attenuation'] / output_total,
+            'output_candidate_count': output['output_candidate_count'] / input_total,
+            'expected_clone': output['expected_clone'] / topk_total,
+            'expected_split': output['expected_split'] / topk_total,
+            'expected_atten': output['expected_atten'] / topk_total,
         }
         return output
 
@@ -278,25 +314,29 @@ class AllocationOperationCollector:
             json.dump(payload, f, indent=2)
 
         md_path = os.path.join(save_dir, f'{name}.md')
-        total = item['input_gaussians']
+        total = item['output_candidate_count']
         bars = [
-            ('keep', item['keep_total']),
-            ('clone', item['clone']),
-            ('split', item['split']),
+            ('pass_through', item['non_topk_pass_through']),
+            ('clone_parent', item['clone_parent']),
+            ('clone_child', item['clone_child']),
+            ('split_child', item['split_child']),
             ('atten', item['opacity_attenuation']),
         ]
         with open(md_path, 'w') as f:
-            f.write(f"# Allocation Operation Frame Report\n\n")
+            f.write(f"# AdaptiveAllocationV5 Frame Report\n\n")
             f.write(f"- frame: `{tag}`\n")
             f.write(f"- module: `{self.latest_record.get('module')}`\n")
             f.write(f"- batch: `{batch_idx}`\n\n")
             f.write('| Metric | Count | Ratio |\n')
             f.write('| --- | ---: | ---: |\n')
             for key in (
-                'input_gaussians', 'selected_topk', 'keep_total',
-                'keep_from_non_topk', 'keep_from_router', 'clone', 'split',
-                'opacity_attenuation', 'expected_output_gaussians',
-                'padded_output_gaussians',
+                'input_gaussians', 'selected_topk', 'non_topk_pass_through',
+                'clone_parent', 'clone_child', 'split_child',
+                'opacity_attenuation', 'output_candidate_count',
+                'padded_output_gaussians', 'expected_clone',
+                'expected_split', 'expected_atten',
+                'topk_p_clone_mean', 'topk_p_split_mean',
+                'topk_p_atten_mean',
             ):
                 ratio = '-' if key not in item['ratios'] else f"{item['ratios'][key]:.6f}"
                 f.write(f"| {key} | {item[key]} | {ratio} |\n")
@@ -310,13 +350,17 @@ class AllocationOperationCollector:
             ratios = item['ratios']
             msg = (
                 f"[AllocationStatistic][Frame {tag}][batch {batch_idx}] "
-                f"keep={item['keep_total']} ({ratios['keep_total']:.2%}), "
-                f"clone={item['clone']} ({ratios['clone']:.2%}), "
-                f"split={item['split']} ({ratios['split']:.2%}), "
-                f"opacity_attenuation={item['opacity_attenuation']} "
-                f"({ratios['opacity_attenuation']:.2%}), "
+                f"pass={item['non_topk_pass_through']}, "
+                f"clone_parent={item['clone_parent']}, "
+                f"clone_child={item['clone_child']}, "
+                f"split_child={item['split_child']}, "
+                f"atten={item['opacity_attenuation']}, "
+                f"p_mean=({item['topk_p_clone_mean']:.3f}, "
+                f"{item['topk_p_split_mean']:.3f}, "
+                f"{item['topk_p_atten_mean']:.3f}), "
                 f"input={item['input_gaussians']}, "
-                f"expected_output={item['expected_output_gaussians']}"
+                f"output={item['output_candidate_count']} "
+                f"({ratios['output_candidate_count']:.2f}x)"
             )
             print(msg)
             if self.logger is not None:
@@ -326,10 +370,6 @@ class AllocationOperationCollector:
         for handle in self._handles:
             handle.remove()
         self._handles = []
-        for module, original in self._original_methods:
-            module.compute_operation_routing = original
-            if hasattr(module, '_allocation_route_cache'):
-                module._allocation_route_cache = None
         self._original_methods = []
         self.latest_record = None
 
@@ -338,15 +378,20 @@ class AllocationOperationCollector:
             return
         os.makedirs(save_dir, exist_ok=True)
         summary = dict(self.summary)
-        total = max(summary['input_gaussians'], 1)
+        input_total = max(summary['input_gaussians'], 1)
+        output_total = max(summary['output_candidate_count'], 1)
+        topk_total = max(summary['selected_topk'], 1)
         summary['ratios'] = {
-            'keep_total': summary['keep_total'] / total,
-            'keep_from_non_topk': summary['keep_from_non_topk'] / total,
-            'keep_from_router': summary['keep_from_router'] / total,
-            'clone': summary['clone'] / total,
-            'split': summary['split'] / total,
-            'opacity_attenuation': summary['opacity_attenuation'] / total,
-            'expected_output_gaussians': summary['expected_output_gaussians'] / total,
+            'selected_topk': summary['selected_topk'] / input_total,
+            'non_topk_pass_through': summary['non_topk_pass_through'] / input_total,
+            'clone_parent': summary['clone_parent'] / output_total,
+            'clone_child': summary['clone_child'] / output_total,
+            'split_child': summary['split_child'] / output_total,
+            'opacity_attenuation': summary['opacity_attenuation'] / output_total,
+            'output_candidate_count': summary['output_candidate_count'] / input_total,
+            'expected_clone': summary['expected_clone'] / topk_total,
+            'expected_split': summary['expected_split'] / topk_total,
+            'expected_atten': summary['expected_atten'] / topk_total,
         }
         json_path = os.path.join(save_dir, 'allocation_stats_summary.json')
         with open(json_path, 'w') as f:
@@ -355,38 +400,46 @@ class AllocationOperationCollector:
         csv_path = os.path.join(save_dir, 'allocation_stats_per_iter.csv')
         with open(csv_path, 'w') as f:
             f.write(
-                'iter,tag,module,batch,input,topk,keep,non_topk_keep,'
-                'routed_keep,clone,split,atten,expected_output,padded_output\n')
+                'iter,tag,module,batch,input,topk,pass_through,'
+                'clone_parent,clone_child,split_child,atten,output,'
+                'expected_clone,expected_split,expected_atten,'
+                'topk_p_clone_mean,topk_p_split_mean,topk_p_atten_mean,'
+                'padded_output\n')
             for record in self.records:
                 for item in record['per_batch']:
                     f.write(
                         f"{record['iter']},{record['tag']},{record['module']},"
                         f"{item['batch_index']},{item['input_gaussians']},"
-                        f"{item['selected_topk']},{item['keep_total']},"
-                        f"{item['keep_from_non_topk']},{item['keep_from_router']},"
-                        f"{item['clone']},{item['split']},"
-                        f"{item['opacity_attenuation']},"
-                        f"{item['expected_output_gaussians']},"
+                        f"{item['selected_topk']},{item['non_topk_pass_through']},"
+                        f"{item['clone_parent']},{item['clone_child']},"
+                        f"{item['split_child']},{item['opacity_attenuation']},"
+                        f"{item['output_candidate_count']},"
+                        f"{item['expected_clone']},{item['expected_split']},"
+                        f"{item['expected_atten']},{item['topk_p_clone_mean']},"
+                        f"{item['topk_p_split_mean']},{item['topk_p_atten_mean']},"
                         f"{item['padded_output_gaussians']}\n")
 
         report_path = os.path.join(save_dir, 'allocation_stats_report.md')
         with open(report_path, 'w') as f:
-            f.write('# AdaptiveAllocationV4 Operation Statistics\n\n')
+            f.write('# AdaptiveAllocationV5 Operation Statistics\n\n')
             f.write('| Metric | Count | Ratio |\n')
             f.write('| --- | ---: | ---: |\n')
             for key in (
-                'input_gaussians', 'keep_total', 'keep_from_non_topk',
-                'keep_from_router', 'clone', 'split',
-                'opacity_attenuation', 'expected_output_gaussians',
+                'input_gaussians', 'selected_topk',
+                'non_topk_pass_through', 'clone_parent', 'clone_child',
+                'split_child', 'opacity_attenuation',
+                'output_candidate_count', 'expected_clone',
+                'expected_split', 'expected_atten',
             ):
                 ratio = '-' if key == 'input_gaussians' else f"{summary['ratios'][key]:.6f}"
                 f.write(f"| {key} | {summary[key]} | {ratio} |\n")
             f.write('\n## Color Legend\n\n')
             f.write('| Operation | Color |\n')
             f.write('| --- | --- |\n')
-            f.write('| keep | gray |\n')
-            f.write('| clone | blue |\n')
-            f.write('| split | red |\n')
+            f.write('| non-TopK pass-through | gray |\n')
+            f.write('| clone parent | deep blue |\n')
+            f.write('| clone child | cyan blue |\n')
+            f.write('| split child | red |\n')
             f.write('| opacity attenuation | yellow |\n')
 
         if self.logger is not None:
@@ -1361,9 +1414,9 @@ if __name__ == '__main__':
     parser.add_argument('--vis-gaussian-adaptive-color', action='store_true', default=False,
                         help='根据 Gaussian opacity 自适应选择红/蓝/灰颜色')
     parser.add_argument('--vis-gaussian-allocation-color', action='store_true', default=False,
-                        help='根据 AdaptiveAllocationV4 的 keep/clone/split/attenuation 操作着色')
+                        help='根据 AdaptiveAllocationV5 的 pass-through/clone/split/attenuation 候选类型着色')
     parser.add_argument('--allocation-statistic', action='store_true', default=False,
-                        help='统计 AdaptiveAllocationV4 的 keep/clone/split/attenuation 操作分布')
+                        help='统计 AdaptiveAllocationV5 的 TopK risky bank 与候选输出分布')
     parser.add_argument('--vis_gaussian_topdown', action='store_true', default=False)
     parser.add_argument('--vis-index', type=int, nargs='+', default=[])
     parser.add_argument('--num-samples', type=int, default=1)

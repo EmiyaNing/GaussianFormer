@@ -1143,14 +1143,26 @@ def save_gaussian(
         print("⚠ 没有有效的高斯点可可视化")
         return
 
+    if len(means) > max_gaussians:
+        print(f"⚠ 高斯点数量过多 ({len(means)})，进行采样到 {max_gaussians}")
+        indices = np.random.choice(len(means), max_gaussians, replace=False)
+        means = means[indices]
+        scales = scales[indices]
+        rotations = rotations[indices]
+        opas = opas[indices]
+        pred = pred[indices]
+        if allocation_ids is not None:
+            allocation_ids = allocation_ids[indices]
+
     adaptive_colors = None
     allocation_colors = None
     if allocation_ids is not None:
         cmap = allocation_color_map or {
             0: [0.55, 0.55, 0.55],
-            1: [0.10, 0.35, 1.00],
-            2: [1.00, 0.10, 0.10],
-            3: [1.00, 0.85, 0.05],
+            1: [0.05, 0.20, 0.95],
+            2: [0.15, 0.65, 1.00],
+            3: [1.00, 0.10, 0.10],
+            4: [1.00, 0.85, 0.05],
         }
         allocation_colors = np.array(
             [cmap.get(int(op_id), [1.0, 1.0, 1.0]) for op_id in allocation_ids],
@@ -1406,9 +1418,10 @@ def save_gaussian_point(
     if allocation_ids is not None:
         cmap = allocation_color_map or {
             0: [0.55, 0.55, 0.55],
-            1: [0.10, 0.35, 1.00],
-            2: [1.00, 0.10, 0.10],
-            3: [1.00, 0.85, 0.05],
+            1: [0.05, 0.20, 0.95],
+            2: [0.15, 0.65, 1.00],
+            3: [1.00, 0.10, 0.10],
+            4: [1.00, 0.85, 0.05],
         }
         allocation_colors = np.array(
             [cmap.get(int(op_id), [1.0, 1.0, 1.0]) for op_id in allocation_ids],

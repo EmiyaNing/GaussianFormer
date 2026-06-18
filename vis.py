@@ -406,9 +406,10 @@ def save_gaussian(
     if allocation_ids is not None:
         cmap = allocation_color_map or {
             0: [0.55, 0.55, 0.55],
-            1: [0.10, 0.35, 1.00],
-            2: [1.00, 0.10, 0.10],
-            3: [1.00, 0.85, 0.05],
+            1: [0.05, 0.20, 0.95],
+            2: [0.15, 0.65, 1.00],
+            3: [1.00, 0.10, 0.10],
+            4: [1.00, 0.85, 0.05],
         }
         allocation_colors = np.array(
             [cmap.get(int(op_id), [1.0, 1.0, 1.0]) for op_id in allocation_ids],
