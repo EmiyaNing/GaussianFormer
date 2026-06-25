@@ -1,10 +1,7 @@
-"""Gaussian Statistic Aggregator —— 跨帧/跨场景数据聚合器（v5 低同步版）。
+"""Gaussian Statistic Aggregator —— 跨帧/跨场景数据聚合器。
 
-v5 核心优化：
-- 所有 per-bin/per-class 累加在 GPU 端完成，消除 ~116 次 .item() 同步/帧
-- 使用 scatter_add_ / bincount 矢量化分类和分桶
-- finalize() 时一次性 GPU→CPU 传输
-- count/covered/total 使用 int64，sum 使用 float64，避免千万级统计的 float32 精度饱和
+使用固定大小的 GPU 累加器和直方图保存流式统计结果，避免将每一帧的
+Gaussian 属性长期保留在 GPU 或在 finalize 时展开为巨大的 Python 列表。
 """
 
 import torch
@@ -22,7 +19,9 @@ class GaussianStatAggregator:
                  empty_label=17, ignore_empty=True,
                  exclude_gaussian_classes: Optional[List[int]] = None,
                  exclude_voxel_classes: Optional[List[int]] = None,
-                 scale_range: Optional[List[float]] = None):
+                 scale_range: Optional[List[float]] = None,
+                 max_pair_elements: int = 64_000_000,
+                 histogram_bins: int = 4096):
         self.t_sphere = t_sphere; self.t_scale = t_scale
         self.distance_bins = distance_bins or [0, 10, 20, 30, 40, 50]
         self.percentiles = percentiles or [50, 75, 90, 95]
@@ -31,6 +30,9 @@ class GaussianStatAggregator:
         self.empty_label = empty_label
         self.ignore_empty = ignore_empty
         self.scale_range = scale_range
+        self.max_pair_elements = max(1, int(max_pair_elements))
+        self.histogram_bins = max(64, int(histogram_bins))
+        self._histogram_ranges = self._get_histogram_ranges(scale_range)
         # 拆分 exclude_classes 为 Gaussian 过滤和 Voxel 过滤
         self.exclude_gaussian_classes = exclude_gaussian_classes if exclude_gaussian_classes is not None else exclude_classes
         self.exclude_voxel_classes = exclude_voxel_classes
@@ -52,11 +54,6 @@ class GaussianStatAggregator:
         # Coverage 累加器
         self.total_cov_covered = 0.0
         self.total_cov_total = 0
-
-        # GPU tensor 累积（延后 CPU 传输）
-        self._acc_s_hat: List[torch.Tensor] = []
-        self._acc_ars: List[torch.Tensor] = []
-        self._acc_volumes: List[torch.Tensor] = []
 
         # GPU 端累加器（消除 .item() 同步）
         self.device = None  # 延迟初始化
@@ -81,6 +78,43 @@ class GaussianStatAggregator:
         self._dcov_total = None
         self._dpurity_match = None
         self._dpurity_total = None
+
+        # 固定大小的流式分布摘要。
+        self._scale_hist = None
+        self._ar_hist = None
+        self._volume_hist = None
+        self._sum_ar = None
+        self._observed_min_scale = None
+        self._observed_max_scale = None
+
+    @staticmethod
+    def _get_histogram_ranges(scale_range):
+        """Return bounded ranges for streaming percentile histograms.
+
+        Refined scales are clamped to ``scale_range`` in the configured model,
+        making these ranges both accurate and compact for the common case.
+        """
+        if scale_range is not None and len(scale_range) >= 2:
+            scale_min, scale_max = float(scale_range[0]), float(scale_range[1])
+        else:
+            scale_min, scale_max = 0.0, 1.0
+
+        scale_min = max(scale_min, 1e-6)
+        scale_max = max(scale_max, scale_min + 1e-6)
+        volume_coeff = 4.0 * np.pi / 3.0
+        return {
+            'scale': (scale_min, scale_max),
+            'volume': (volume_coeff * scale_min ** 3,
+                       volume_coeff * scale_max ** 3),
+            'ar': (1.0, max(scale_max / scale_min, 1.0 + 1e-6)),
+        }
+
+    def _accumulate_histogram(self, values, histogram, value_range):
+        low, high = value_range
+        indices = torch.floor(
+            (values.float() - low) * self.histogram_bins / (high - low)
+        ).to(torch.long).clamp_(0, self.histogram_bins - 1)
+        histogram.add_(torch.bincount(indices, minlength=self.histogram_bins))
 
     def _init_gpu_state(self, device):
         """延迟初始化 GPU 累加器。"""
@@ -108,6 +142,18 @@ class GaussianStatAggregator:
         self._dcov_total = torch.zeros(n_bins, device=device, dtype=torch.long)
         self._dpurity_match = torch.zeros(n_bins, device=device, dtype=torch.long)
         self._dpurity_total = torch.zeros(n_bins, device=device, dtype=torch.long)
+
+        self._scale_hist = torch.zeros(
+            self.histogram_bins, device=device, dtype=torch.long)
+        self._ar_hist = torch.zeros(
+            self.histogram_bins, device=device, dtype=torch.long)
+        self._volume_hist = torch.zeros(
+            self.histogram_bins, device=device, dtype=torch.long)
+        self._sum_ar = torch.zeros((), device=device, dtype=torch.float64)
+        self._observed_min_scale = torch.full(
+            (), float('inf'), device=device, dtype=torch.float32)
+        self._observed_max_scale = torch.full(
+            (), float('-inf'), device=device, dtype=torch.float32)
         # 初始化排除类别的 GPU tensor
         if self.exclude_gaussian_classes is not None:
             self._exclude_gaussian_classes_tensor = torch.tensor(
@@ -144,11 +190,17 @@ class GaussianStatAggregator:
         self.sum_ligr += ((s_hat > self.t_scale) & (ar < self.t_sphere)).float().mean().item()
         vol = (4.0/3.0)*torch.pi*scales[:,0]*scales[:,1]*scales[:,2]
         self.vol_sum += vol.sum().item(); self.vol_count += G
-
-        # GPU tensor 累积
-        self._acc_s_hat.append(s_hat.detach())
-        self._acc_ars.append(ar.detach())
-        self._acc_volumes.append(vol.detach())
+        self._accumulate_histogram(
+            s_hat, self._scale_hist, self._histogram_ranges['scale'])
+        self._accumulate_histogram(
+            ar, self._ar_hist, self._histogram_ranges['ar'])
+        self._accumulate_histogram(
+            vol, self._volume_hist, self._histogram_ranges['volume'])
+        self._sum_ar.add_(ar.to(torch.float64).sum())
+        self._observed_min_scale.copy_(
+            torch.minimum(self._observed_min_scale, s_hat.min().float()))
+        self._observed_max_scale.copy_(
+            torch.maximum(self._observed_max_scale, s_hat.max().float()))
 
         # ---- 提取 GT 数据 ----
         occ_xyz = metas.get('occ_xyz'); occ_label = metas.get('occ_label')
@@ -249,7 +301,8 @@ class GaussianStatAggregator:
             means, precomp, valid_xyz, valid_label,
             cov_threshold=self.cov_threshold, chunk_size=self.chunk_size,
             voxel_bin_idx=torch.where(valid_b, bin_idx, torch.full_like(bin_idx, -1)),
-            n_bins=n_bins, return_extra_stats=True)
+            n_bins=n_bins, return_extra_stats=True,
+            max_pair_elements=self.max_pair_elements)
 
         # Distance-wise Coverage：GPU 端 bucketize + scatter_add
         ones_n_long = torch.ones(valid_xyz.shape[0], device=device, dtype=torch.long)
@@ -325,10 +378,7 @@ class GaussianStatAggregator:
     def get_snapshot(self) -> dict:
         if self.total_frames == 0: return {}
         def _s(a, b): return a/b if b else 0.0
-        if self._acc_ars:
-            mean_ar = torch.cat(self._acc_ars).mean().item()
-        else:
-            mean_ar = 0.0
+        mean_ar = _s(self._sum_ar.item(), self.total_gaussians)
         return {'frames': self.total_frames, 'gaussians': self.total_gaussians,
                 'mean_scale': _s(self.sum_mean_scale, self.total_frames),
                 'nsr': _s(self.sum_nsr, self.total_frames),
@@ -347,10 +397,11 @@ class GaussianStatAggregator:
     def finalize(self) -> dict:
         if self.total_frames == 0: return {'error': 'No frames processed'}
 
-        # 一次性 GPU→CPU 传输
-        all_s_hat = torch.cat(self._acc_s_hat).cpu().tolist() if self._acc_s_hat else []
-        all_ars   = torch.cat(self._acc_ars).cpu().tolist() if self._acc_ars else []
-        all_vols  = torch.cat(self._acc_volumes).cpu().tolist() if self._acc_volumes else []
+        # Bounded histogram summaries replace the previous full-dataset GPU
+        # concatenation and Python-list conversion.
+        scale_hist = self._scale_hist.cpu().numpy()
+        ar_hist = self._ar_hist.cpu().numpy()
+        volume_hist = self._volume_hist.cpu().numpy()
 
         dist_count = self._dist_count.cpu().tolist()
         dist_sum_scale = self._dist_sum_scale.cpu().tolist()
@@ -373,7 +424,19 @@ class GaussianStatAggregator:
         dpurity_total = self._dpurity_total.cpu().tolist()
 
         def _s(a, b): return a/b if b else 0.0
-        def _p(arr, q): return float(np.percentile(arr, q)) if arr else 0.0
+
+        def _hist_percentile(hist, value_range, q):
+            total = int(hist.sum())
+            if total == 0:
+                return 0.0
+            rank = q / 100.0 * (total - 1)
+            index = int(np.searchsorted(np.cumsum(hist), rank, side='right'))
+            index = min(index, self.histogram_bins - 1)
+            low, high = value_range
+            return float(low + (index + 0.5) * (high - low) / self.histogram_bins)
+
+        observed_min_scale = self._observed_min_scale.item()
+        observed_max_scale = self._observed_max_scale.item()
 
         result = {'num_frames': self.total_frames, 'num_gaussians': self.total_gaussians,
                   'mean_scale': self.sum_mean_scale/self.total_frames,
@@ -389,22 +452,30 @@ class GaussianStatAggregator:
                   'cov_threshold': self.cov_threshold,
                   'coverage_voxel_scope': 'non_empty_visible' if self.ignore_empty else 'visible'}
 
-        observed_min_scale = min(all_s_hat) if all_s_hat else 0.0
-        observed_max_scale = max(all_s_hat) if all_s_hat else 0.0
         result['scale_sanity'] = {
             'configured_scale_range': self.scale_range,
             'observed_min_s_hat': float(observed_min_scale),
             'observed_max_s_hat': float(observed_max_scale),
+            'percentile_method': 'streaming_histogram',
+            'histogram_bins': self.histogram_bins,
         }
 
-        result['scale_percentiles'] = {f'P{p}': _p(all_s_hat, p) for p in self.percentiles}
+        result['scale_percentiles'] = {
+            f'P{p}': _hist_percentile(
+                scale_hist, self._histogram_ranges['scale'], p)
+            for p in self.percentiles}
         result['scale_volume'] = {'mean_volume': _s(self.vol_sum, self.vol_count),
-            'p90_volume': _p(all_vols, 90), 'p95_volume': _p(all_vols, 95)}
+            'p90_volume': _hist_percentile(
+                volume_hist, self._histogram_ranges['volume'], 90),
+            'p95_volume': _hist_percentile(
+                volume_hist, self._histogram_ranges['volume'], 95)}
 
-        ar_arr = np.array(all_ars, dtype=np.float64)
-        result['anisotropy_ratio'] = {'mean_ar': float(ar_arr.mean()) if len(ar_arr) else 0,
-            'median_ar': float(np.median(ar_arr)) if len(ar_arr) else 0,
-            'p75_ar': _p(all_ars, 75), 'p90_ar': _p(all_ars, 90)}
+        result['anisotropy_ratio'] = {
+            'mean_ar': _s(self._sum_ar.item(), self.total_gaussians),
+            'median_ar': _hist_percentile(ar_hist, self._histogram_ranges['ar'], 50),
+            'p75_ar': _hist_percentile(ar_hist, self._histogram_ranges['ar'], 75),
+            'p90_ar': _hist_percentile(ar_hist, self._histogram_ranges['ar'], 90),
+        }
 
         n_bins = len(self.distance_bins) - 1
         total_g = self.total_gaussians

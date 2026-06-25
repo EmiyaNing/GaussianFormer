@@ -125,9 +125,10 @@ def compute_distance_stats(means, scales, t_sphere, distance_bins):
 def compute_coverage_and_purity(
     means, precomp, voxel_xyz, voxel_label,
     cov_threshold=3.0, chunk_size=10000, use_fast_mahalanobis=True,
-    voxel_bin_idx=None, n_bins=None, return_extra_stats=False
+    voxel_bin_idx=None, n_bins=None, return_extra_stats=False,
+    max_pair_elements=None
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """v5 voxel-chunked 矢量化版。chunk_size=10000（默认）。"""
+    """Voxel-chunked coverage and purity with a bounded dense-distance peak."""
     N, G = voxel_xyz.shape[0], means.shape[0]
     device = means.device
     if N == 0 or G == 0:
@@ -148,6 +149,16 @@ def compute_coverage_and_purity(
     scales_vec = precomp['scales_vec']; search_radius = precomp['search_radius']
     pred_class = precomp['pred_class']; tau_sq = cov_threshold**2
 
+    chunk_size = max(1, int(chunk_size))
+    if max_pair_elements is not None:
+        # ``torch.cdist`` materializes a dense [chunk, G] tensor. Bound the
+        # element count so that a larger history-derived G cannot cause a
+        # sudden multi-GB allocation.
+        chunk_size = min(
+            chunk_size,
+            max(1, int(max_pair_elements) // max(G, 1)),
+        )
+
     covered = torch.zeros(N, dtype=torch.bool, device=device)
     p_match = torch.zeros(G, dtype=torch.int64, device=device)
     p_total = torch.zeros(G, dtype=torch.int64, device=device)
@@ -158,14 +169,18 @@ def compute_coverage_and_purity(
         distance_purity_match = torch.zeros(n_bins, dtype=torch.int64, device=device)
         distance_purity_total = torch.zeros(n_bins, dtype=torch.int64, device=device)
 
-    for start in range(0, N, chunk_size):
-        end = min(start + chunk_size, N)
-        chunk_v = voxel_xyz[start:end]; chunk_l = voxel_label[start:end]
+    def process_chunk(start, end):
+        """Keep dense chunk intermediates scoped to one helper invocation."""
+        chunk_v = voxel_xyz[start:end]
+        chunk_l = voxel_label[start:end]
 
         dists = torch.cdist(chunk_v, means)
         cand_mask = dists <= search_radius[None, :]
+        del dists
         pairs = cand_mask.nonzero(as_tuple=False)
-        if pairs.shape[0] == 0: continue
+        del cand_mask
+        if pairs.shape[0] == 0:
+            return
 
         vi, gj = pairs[:, 0], pairs[:, 1]
         diff = chunk_v[vi] - means[gj]
@@ -177,12 +192,14 @@ def compute_coverage_and_purity(
             mahal = torch.einsum('ki,kij,kj->k', diff, cov_inv[gj], diff)
 
         hit = mahal <= tau_sq
-        if not hit.any(): continue
+        if not hit.any():
+            return
 
         hv, hg = vi[hit], gj[hit]
         covered[start + hv] = True
         hit_match = chunk_l[hv] == pred_class[hg]
-        p_total.scatter_add_(0, hg, torch.ones(hg.shape[0], dtype=torch.int64, device=device))
+        p_total.scatter_add_(
+            0, hg, torch.ones(hg.shape[0], dtype=torch.int64, device=device))
         p_match.scatter_add_(0, hg, hit_match.long())
 
         if return_extra_stats:
@@ -195,6 +212,9 @@ def compute_coverage_and_purity(
                 distance_purity_total.scatter_add_(
                     0, vb, torch.ones(vb.shape[0], dtype=torch.int64, device=device))
                 distance_purity_match.scatter_add_(0, vb, hit_match[valid_bins].long())
+
+    for start in range(0, N, chunk_size):
+        process_chunk(start, min(start + chunk_size, N))
 
     if not return_extra_stats:
         return covered, p_match, p_total

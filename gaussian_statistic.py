@@ -160,6 +160,8 @@ def main(local_rank, args):
         empty_label=args.empty_label,
         ignore_empty=args.ignore_empty,
         scale_range=cfg.get('scale_range', None),
+        max_pair_elements=args.max_pair_elements,
+        histogram_bins=args.histogram_bins,
     )
 
     stat_freq = args.stat_freq
@@ -173,9 +175,19 @@ def main(local_rank, args):
 
             input_imgs = data.pop('img')
             metas = data
-            result_dict = my_model(imgs=input_imgs, metas=metas)
-
-            gaussian = result_dict.get('gaussian')
+            # Statistics only consume the final Gaussian prediction. Skipping the
+            # GaussianHead avoids an unnecessary local-aggregation render for
+            # every validation frame.
+            representation = my_model(
+                imgs=input_imgs,
+                metas=metas,
+                rep_only=True,
+            )
+            gaussian = (
+                representation[-1].get('gaussian')
+                if isinstance(representation, (list, tuple)) and representation
+                else None
+            )
             if gaussian is None:
                 logger.warning(f'[SKIP] Iter {i_iter_val}: no gaussian in result_dict')
                 continue
@@ -199,6 +211,11 @@ def main(local_rank, args):
                     )
                 else:
                     logger.info(f'[STAT] Iter {i_iter_val:5d} (no frames yet)')
+
+            # The aggregator keeps only bounded streaming summaries. Releasing
+            # frame-local references here prevents delayed Python reclamation
+            # from extending the peak across validation iterations.
+            del gaussian, representation, input_imgs, metas, data
 
     # ---- 多卡汇总（简化方案：仅 rank 0 输出） ----
     if distributed:
@@ -233,6 +250,10 @@ if __name__ == '__main__':
                         help='每隔多少帧打印一次中间统计快照（默认 100）')
     parser.add_argument('--chunk-size', type=int, default=30000,
                         help='Coverage/Purity 遍历时的 chunk 大小（默认 30000）')
+    parser.add_argument('--max-pair-elements', type=int, default=64_000_000,
+                        help='单个 coverage chunk 最多保留的 voxel-Gaussian 距离元素数')
+    parser.add_argument('--histogram-bins', type=int, default=4096,
+                        help='流式分位数统计的直方图 bin 数')
     parser.add_argument('--exclude-classes', type=int, nargs='+', default=None,
                         help='[已弃用] 请使用 --exclude-gaussian-classes')
     parser.add_argument('--exclude-gaussian-classes', type=int, nargs='+', default=None,
