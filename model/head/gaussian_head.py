@@ -153,6 +153,9 @@ class GaussianHead(BaseTaskHead):
         occ_label = metas['occ_label'].to(self.zero_tensor.device)
         occ_cam_mask = metas['occ_cam_mask'].to(self.zero_tensor.device) if 'occ_cam_mask' in metas.keys() else None
         occ_mask     = metas['occ_mask'].to(self.zero_tensor.device) if 'occ_mask' in metas.keys() else None
+        occ_lidar_mask = metas['occ_lidar_mask'].to(self.zero_tensor.device) if 'occ_lidar_mask' in metas.keys() else None
+        occ_nonempty_mask = metas['occ_nonempty_mask'].to(self.zero_tensor.device) if 'occ_nonempty_mask' in metas.keys() else None
+        occ_loss_mask = metas['occ_loss_mask'].to(self.zero_tensor.device) if 'occ_loss_mask' in metas.keys() else occ_mask
         sampled_xyz, sampled_label = self._sampling(occ_xyz, occ_label, None)
         for idx in apply_loss_layers:
             gaussians = representation[idx]['gaussian']
@@ -197,9 +200,11 @@ class GaussianHead(BaseTaskHead):
             'sampled_label': sampled_label,
             'sampled_xyz': sampled_xyz,
             'occ_mask': occ_mask,
+            'occ_loss_mask': occ_loss_mask,
             'occ_cam_mask': occ_cam_mask,
+            'occ_lidar_mask': occ_lidar_mask,
+            'occ_nonempty_mask': occ_nonempty_mask,
             'final_occ': final_prediction,
             'gaussian': representation[-1]['gaussian'],
             'gaussians': [r['gaussian'] for r in representation]
         }
-

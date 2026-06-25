@@ -20,6 +20,34 @@ warnings.filterwarnings("ignore")
 def pass_print(*args, **kwargs):
     pass
 
+
+def get_occ3d_eval_mask_name(cfg):
+    mask_name = cfg.get('occ3d_eval_mask', None)
+    if mask_name is not None:
+        return mask_name
+    return 'camera' if cfg.get('eval_mask_flag', True) else 'none'
+
+
+def select_occ3d_eval_mask(result_dict, idx, cfg):
+    mask_name = get_occ3d_eval_mask_name(cfg)
+    if mask_name == 'none':
+        return None
+    if mask_name == 'camera':
+        mask = result_dict.get('occ_cam_mask', None)
+    elif mask_name == 'lidar':
+        mask = result_dict.get('occ_lidar_mask', None)
+    elif mask_name == 'nonempty':
+        mask = result_dict.get('occ_nonempty_mask', None)
+        if mask is None:
+            mask = result_dict.get('occ_mask', None)
+    else:
+        raise NotImplementedError(f'Unsupported Occ3D eval mask: {mask_name}')
+
+    if mask is not None and mask.dim() >= 4:
+        mask = mask[idx]
+    return mask.flatten() if mask is not None else None
+
+
 def main(local_rank, args):
     # global settings
     set_random_seed(args.seed)
@@ -336,10 +364,7 @@ def main(local_rank, args):
                         if cfg.dataset_name_flag == 'surroundocc':
                             occ_mask = result_dict['occ_cam_mask'][idx].flatten()
                         elif cfg.dataset_name_flag == 'occ3d':
-                            if cfg.eval_mask_flag:
-                                occ_mask = result_dict['occ_cam_mask']
-                            else:
-                                occ_mask = result_dict['occ_mask']
+                            occ_mask = select_occ3d_eval_mask(result_dict, idx, cfg)
                         miou_metric._after_step(pred_occ, gt_occ, occ_mask)
                 
                 val_loss_list.append(loss.detach().cpu().numpy())

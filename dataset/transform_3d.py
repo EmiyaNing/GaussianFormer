@@ -660,14 +660,23 @@ class LoadOccupancyOcc3D(object):
                  semantic=True, 
                  pc_range=[-50.0, -50.0, -5.0, 50.0, 50.0, 3.0], 
                  grid_size=0.5, 
-                 use_ego=False, use_sweeps=False, perturb=False):
+                 use_ego=False,
+                 use_sweeps=False,
+                 perturb=False,
+                 model_coord=None,
+                 train_mask_type='none'):
         self.occ3d_path = occ3d_path
         self.semantic = semantic
         self.use_ego = use_ego
         self.use_sweeps = use_sweeps
         self.perturb = perturb
+        self.model_coord = model_coord
+        self.train_mask_type = train_mask_type
+        if self.model_coord is not None:
+            assert self.model_coord in ('ego', 'lidar')
+        assert self.train_mask_type in (
+            'none', 'camera', 'lidar', 'camera_lidar', 'nonempty')
 
-        # 创建与SurroundOcc相同的3D网格坐标
         xyz = self.get_meshgrid(pc_range, [200, 200, 16], grid_size)
         self.xyz = np.concatenate([xyz, np.ones_like(xyz[..., :1])], axis=-1)
         
@@ -675,6 +684,55 @@ class LoadOccupancyOcc3D(object):
         self.timestamp_to_sample = self._load_timestamp_to_sample()
         self.scene_token_to_name = self._load_scene_token_to_name()
 
+    def _select_train_mask(self, mask_camera, mask_lidar, mask_nonempty):
+        if self.train_mask_type == 'none':
+            return np.ones_like(mask_camera, dtype=bool)
+        if self.train_mask_type == 'camera':
+            return mask_camera
+        if self.train_mask_type == 'lidar':
+            return mask_lidar
+        if self.train_mask_type == 'camera_lidar':
+            return mask_camera & mask_lidar
+        if self.train_mask_type == 'nonempty':
+            return mask_nonempty
+        raise NotImplementedError
+
+    def _resolve_label_file(self, results):
+        occ_path = results.get('occ_path', '')
+        if occ_path:
+            candidate_paths = [
+                occ_path,
+                os.path.join(self.occ3d_path, occ_path),
+                os.path.join(os.path.dirname(self.occ3d_path), occ_path),
+            ]
+            for candidate in candidate_paths:
+                if os.path.isdir(candidate):
+                    candidate = os.path.join(candidate, 'labels.npz')
+                if os.path.exists(candidate):
+                    return candidate
+
+        sample_token = results.get('sample_idx', '')
+        scene_token = results.get('scene_token', '')
+        scene_name = self.scene_token_to_name.get(scene_token)
+        if sample_token and scene_name:
+            label_file = os.path.join(
+                self.occ3d_path, scene_name, sample_token, 'labels.npz')
+            if os.path.exists(label_file):
+                return label_file
+
+        lidar_filename = results['pts_filename'].split('/')[-1]
+        timestamp_str = lidar_filename.split('__')[-1].split('.')[0]
+        sample_info = self.timestamp_to_sample.get(timestamp_str)
+        if not sample_info:
+            raise ValueError(f"时间戳 {timestamp_str} 在sample.json中未找到对应样本")
+
+        frame_token = sample_info['token']
+        scene_token = sample_info['scene_token']
+        scene_name = self.scene_token_to_name.get(scene_token)
+        if not scene_name:
+            raise ValueError(f"scene_token {scene_token} 在scene.json中未找到对应场景")
+
+        return os.path.join(self.occ3d_path, scene_name, frame_token, 'labels.npz')
 
     def _load_timestamp_to_sample(self):
         """从sample.json加载时间戳到样本信息的映射"""
@@ -720,63 +778,55 @@ class LoadOccupancyOcc3D(object):
         return xyz
 
     def __call__(self, results):
-        # 1. 获取时间戳（从LiDAR文件名中提取）
-        lidar_filename = results['pts_filename'].split('/')[-1]
-        # 从文件名提取时间戳：n015-2018-07-24-11-22-45+0800__LIDAR_TOP__1532402927647951.pcd.bin
-        timestamp_str = lidar_filename.split('__')[-1].split('.')[0]  # 1532402927647951
-        
-        # 2. 通过时间戳找到sample信息
-        sample_info = self.timestamp_to_sample.get(timestamp_str)
-        if not sample_info:
-            raise ValueError(f"时间戳 {timestamp_str} 在sample.json中未找到对应样本")
-        
-        frame_token = sample_info['token']
-        scene_token = sample_info['scene_token']
-        
-        # 3. 通过scene_token找到scene_name
-        scene_name = self.scene_token_to_name.get(scene_token)
-        if not scene_name:
-            raise ValueError(f"scene_token {scene_token} 在scene.json中未找到对应场景")
-        
-        # 4. 构建Occ3D标注路径
-        label_file = os.path.join(self.occ3d_path, scene_name, frame_token, "labels.npz")
+        label_file = self._resolve_label_file(results)
         
         if os.path.exists(label_file):
-            # 加载Occ3D标注
             labels = np.load(label_file)
             semantics = labels['semantics'].astype(np.int64)
             mask_camera = labels['mask_camera'].astype(bool)
             mask_lidar = labels['mask_lidar'].astype(bool)
-            
-            # 保持与SurroundOcc相同的字段名
-            results['occ_label'] = semantics if self.semantic else (semantics != 17)
-            mask = semantics != 17
-            #results['occ_cam_mask'] = mask_camera & mask_lidar
-            results['occ_mask'] = mask
-            results['occ_cam_mask']   = mask_camera 
+            mask_nonempty = semantics != 17
+            mask_loss = self._select_train_mask(
+                mask_camera, mask_lidar, mask_nonempty)
+
+            results['occ_label'] = semantics if self.semantic else mask_nonempty
+            results['occ_mask'] = mask_nonempty
+            results['occ_nonempty_mask'] = mask_nonempty
+            results['occ_cam_mask'] = mask_camera
             results['occ_lidar_mask'] = mask_lidar
+            results['occ_loss_mask'] = mask_loss
             
         elif self.use_sweeps:
-            # 处理sweep数据的情况
             new_label = np.ones((200, 200, 16), dtype=np.int64) * 17
-            mask = new_label != 17
-            results['occ_label'] = new_label if self.semantic else (new_label != 17)
-            results['occ_mask']  = mask
-            results['occ_cam_mask']   = mask 
-            results['occ_lidar_mask'] = mask
+            mask_nonempty = new_label != 17
+            mask_visible = np.zeros_like(mask_nonempty, dtype=bool)
+            mask_loss = self._select_train_mask(
+                mask_visible, mask_visible, mask_nonempty)
+            results['occ_label'] = new_label if self.semantic else mask_nonempty
+            results['occ_mask'] = mask_nonempty
+            results['occ_nonempty_mask'] = mask_nonempty
+            results['occ_cam_mask'] = mask_visible
+            results['occ_lidar_mask'] = mask_visible
+            results['occ_loss_mask'] = mask_loss
         else:
             raise FileNotFoundError(f"Occ3D标注文件不存在: {label_file}")
 
-        # 处理坐标数据（与SurroundOcc相同）
         xyz = self.xyz.copy()
         if getattr(self, "perturb", False):
             norm_distribution = np.clip(np.random.randn(*xyz.shape[:-1], 3) / 6, -0.5, 0.5)
             xyz[..., :3] = xyz[..., :3] + norm_distribution * 0.49
 
-        if not self.use_ego:
+        if self.model_coord is None:
+            if not self.use_ego:
+                occ_xyz = xyz[..., :3]
+            else:
+                ego2lidar = np.linalg.inv(results['ego2lidar'])
+                occ_xyz = ego2lidar[None, None, None, ...] @ xyz[..., None]
+                occ_xyz = np.squeeze(occ_xyz, -1)[..., :3]
+        elif self.model_coord == 'ego':
             occ_xyz = xyz[..., :3]
         else:
-            ego2lidar = np.linalg.inv(results['ego2lidar'])
+            ego2lidar = results['ego2lidar']
             occ_xyz = ego2lidar[None, None, None, ...] @ xyz[..., None]
             occ_xyz = np.squeeze(occ_xyz, -1)[..., :3]
         

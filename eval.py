@@ -19,6 +19,22 @@ warnings.filterwarnings("ignore")
 def pass_print(*args, **kwargs):
     pass
 
+
+def get_occ3d_eval_mask_name(cfg):
+    mask_name = cfg.get('occ3d_eval_mask', None)
+    if mask_name is not None:
+        return mask_name
+    return 'camera' if cfg.get('eval_mask_flag', True) else 'none'
+
+
+def occ3d_mask_to_numpy(result_dict, key, idx):
+    mask = result_dict.get(key, None)
+    if mask is None:
+        return None
+    if mask.dim() >= 4:
+        mask = mask[idx]
+    return mask.cpu().numpy()
+
 def main(local_rank, args):
     # global settings
     set_random_seed(args.seed)
@@ -136,10 +152,11 @@ def main(local_rank, args):
         miou_metric.reset()
     elif cfg.dataset_name_flag == 'occ3d':
         from misc.occ3d_nus_metrics import Metric_mIoU
+        occ3d_eval_mask = get_occ3d_eval_mask_name(cfg)
         miou_metric = Metric_mIoU(
-                    num_classes=18,
-                    use_lidar_mask=False,
-                    use_image_mask=True)
+            num_classes=18,
+            use_lidar_mask=occ3d_eval_mask == 'lidar',
+            use_image_mask=occ3d_eval_mask == 'camera')
     else:
         print("Not emplement this dataset:", cfg.dataset_name_flag)
         exit(0)
@@ -164,16 +181,14 @@ def main(local_rank, args):
                         occ_mask = result_dict['occ_cam_mask'][idx].flatten()
                         miou_metric._after_step(pred_occ, gt_occ, occ_mask)
                     elif cfg.dataset_name_flag == 'occ3d':
-                        #if cfg.eval_mask_flag:
-                        #    occ_mask = result_dict['occ_cam_mask']
-                        #else:
-                        #    occ_mask = result_dict['occ_mask']
-                        #import pdb
-                        #pdb.set_trace()
                         pred_occ = pred_occ.reshape(200, 200, 16).cpu().numpy()
                         gt_occ   = gt_occ.reshape(200, 200, 16).cpu().numpy()
-                        occ_cam_mask = result_dict['occ_cam_mask'].squeeze(0).cpu().numpy()
-                        miou_metric.add_batch(pred_occ, gt_occ, result_dict['occ_mask'], occ_cam_mask)
+                        occ_cam_mask = occ3d_mask_to_numpy(
+                            result_dict, 'occ_cam_mask', idx)
+                        occ_lidar_mask = occ3d_mask_to_numpy(
+                            result_dict, 'occ_lidar_mask', idx)
+                        miou_metric.add_batch(
+                            pred_occ, gt_occ, occ_lidar_mask, occ_cam_mask)
                     # breakpoint()
             
             if i_iter_val % print_freq == 0 and local_rank == 0:

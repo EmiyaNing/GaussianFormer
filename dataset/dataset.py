@@ -22,6 +22,7 @@ class NuScenesDataset(Dataset):
         vis_indices=None,
         pc_range=[-50.0, -50.0, -5.0, 50.0, 50.0, 3.0],
         occ3d=False,
+        occ3d_coord='ego',
         vis_scene_index=-1,
         phase='train',
         return_keys=[
@@ -50,6 +51,8 @@ class NuScenesDataset(Dataset):
         self.num_lidar_history = num_lidar_history
         self.test_mode = (phase != 'train')
         self.occ3d = occ3d
+        self.occ3d_coord = occ3d_coord
+        assert self.occ3d_coord in ('ego', 'lidar')
         self.pipeline = []
         for t in pipeline:
             self.pipeline.append(OPENOCC_TRANSFORMS.build(t))
@@ -138,8 +141,8 @@ class NuScenesDataset(Dataset):
             lidar2global,
             lidar_history,
         )
-        if self.occ3d:
-            lidar_reflect = lidar_points[:, 2:3]
+        if self.occ3d and self.occ3d_coord == 'ego':
+            lidar_reflect = lidar_points[:, 3:4].copy()
             lidar_points[:, 3] = 1.0
             lidar_points = lidar2ego[None, ...] @ lidar_points[..., None]
             lidar_points = np.squeeze(lidar_points, axis=-1)
@@ -151,6 +154,7 @@ class NuScenesDataset(Dataset):
             lidar_points = lidar_points[mask]
             lidar_reflect= lidar_reflect[mask]
             lidar_points = np.concatenate([lidar_points, lidar_reflect], axis=-1)
+            lidar_points = lidar_points.astype(np.float32, copy=False)
 
         for cam_type in self.sensor_types:
             image_paths.append(os.path.join(self.data_path, info['data'][cam_type]['filename']))
@@ -161,13 +165,16 @@ class NuScenesDataset(Dataset):
             lidar2img_rts.append(lidar2img)
             ego2image_rts.append(np.linalg.inv(img2global) @ ego2global)
 
-            img2lidar = np.linalg.inv(lidar2global) @ img2global
+            if self.occ3d and self.occ3d_coord == 'ego':
+                img2model = np.linalg.inv(ego2global) @ img2global
+            else:
+                img2model = np.linalg.inv(lidar2global) @ img2global
             intrinsic = info['data'][cam_type]['calib']['camera_intrinsic']
             viewpad = np.eye(4)
             viewpad[:3, :3] = intrinsic
-            cam_position = img2lidar @ viewpad @ np.array([0., 0., 0., 1.]).reshape([4, 1])
+            cam_position = img2model @ viewpad @ np.array([0., 0., 0., 1.]).reshape([4, 1])
             cam_positions.append(cam_position.flatten()[:3])
-            focal_position = img2lidar @ viewpad @ np.array([0., 0., f, 1.]).reshape([4, 1])
+            focal_position = img2model @ viewpad @ np.array([0., 0., f, 1.]).reshape([4, 1])
             focal_positions.append(focal_position.flatten()[:3])
             
         input_dict =dict(
@@ -175,6 +182,8 @@ class NuScenesDataset(Dataset):
             sample_idx=info.get("token", ""),
             # occ_path=info["occ_path"],
             occ_path=info.get("occ_path", ""),
+            scene_token=info.get("scene_token", scene_token),
+            frame_index=frame_index,
             timestamp=info["timestamp"] / 1e6,
             img_filename=image_paths,
             pts_filename=os.path.abspath(os.path.join(self.data_path, info['data']['LIDAR_TOP']['filename'])),
