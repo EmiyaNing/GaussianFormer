@@ -31,6 +31,12 @@ class OPUSHead(BaseTaskHead):
         upper = points.new_tensor(self.pc_range[3:])
         return points * (upper - lower) + lower
 
+    @staticmethod
+    def _flatten_voxel_tensor(value, keep_last_dim=False):
+        if value is None:
+            return None
+        return value.flatten(1, -2) if keep_last_dim else value.flatten(1)
+
     def forward(self, representation, metas=None, **kwargs):
         if len(representation) != len(self.point_multipliers):
             raise ValueError('point_multipliers must contain one entry per decoder layer')
@@ -49,6 +55,15 @@ class OPUSHead(BaseTaskHead):
         # large, unused autograd graph during OPUS set-loss training.
         final_occ = self.rasterizer(
             pred_points[-1].detach(), pred_logits[-1].detach(), self.score_threshold)
+        # Keep the same [B, V] metric contract as GaussianHead. The loss uses
+        # raw values from metas directly, so this does not alter supervision.
+        sampled_xyz = self._flatten_voxel_tensor(metas.get('occ_xyz'), keep_last_dim=True)
+        sampled_label = self._flatten_voxel_tensor(metas.get('occ_label'))
+        occ_mask = self._flatten_voxel_tensor(metas.get('occ_mask'))
+        occ_cam_mask = self._flatten_voxel_tensor(metas.get('occ_cam_mask'))
+        occ_lidar_mask = self._flatten_voxel_tensor(metas.get('occ_lidar_mask'))
+        occ_nonempty_mask = self._flatten_voxel_tensor(metas.get('occ_nonempty_mask'))
+        occ_loss_mask = self._flatten_voxel_tensor(metas.get('occ_loss_mask'))
         result = {
             'opus_pred_points': pred_points,
             'opus_pred_logits': pred_logits,
@@ -57,11 +72,12 @@ class OPUSHead(BaseTaskHead):
             'opus_scores': pred_logits[-1].softmax(dim=-1).amax(dim=-1),
             'final_occ': final_occ,
             'final_occ_grid': final_occ.view(final_occ.shape[0], *self.rasterizer.grid_shape),
-            'sampled_xyz': metas.get('occ_xyz') if metas is not None else None,
-            'sampled_label': metas.get('occ_label') if metas is not None else None,
-            'occ_cam_mask': metas.get('occ_cam_mask') if metas is not None else None,
-            'occ_lidar_mask': metas.get('occ_lidar_mask') if metas is not None else None,
-            'occ_nonempty_mask': metas.get('occ_nonempty_mask') if metas is not None else None,
-            'occ_loss_mask': metas.get('occ_loss_mask') if metas is not None else None,
+            'sampled_xyz': sampled_xyz,
+            'sampled_label': sampled_label,
+            'occ_mask': occ_mask,
+            'occ_cam_mask': occ_cam_mask,
+            'occ_lidar_mask': occ_lidar_mask,
+            'occ_nonempty_mask': occ_nonempty_mask,
+            'occ_loss_mask': occ_loss_mask,
         }
         return result
