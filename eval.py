@@ -27,12 +27,23 @@ def get_occ3d_eval_mask_name(cfg):
     return 'camera' if cfg.get('eval_mask_flag', True) else 'none'
 
 
-def occ3d_mask_to_numpy(result_dict, key, idx):
+def occ3d_mask_to_numpy(result_dict, key, idx, grid_shape):
     mask = result_dict.get(key, None)
     if mask is None:
         return None
-    if mask.dim() >= 4:
+    if mask.dim() == 4:
         mask = mask[idx]
+    elif mask.dim() == 2:
+        mask = mask[idx]
+        if mask.numel() != int(np.prod(grid_shape)):
+            raise ValueError(
+                f'Flattened {key} has {mask.numel()} elements, expected '
+                f'{int(np.prod(grid_shape))} for grid_shape={grid_shape}.')
+        mask = mask.reshape(*grid_shape)
+    elif tuple(mask.shape) != tuple(grid_shape):
+        raise ValueError(
+            f'Unsupported {key} shape {tuple(mask.shape)}; expected '
+            f'[B, *{tuple(grid_shape)}], [B, V], or {tuple(grid_shape)}.')
     return mask.cpu().numpy()
 
 
@@ -191,9 +202,9 @@ def main(local_rank, args):
                         pred_occ = pred_occ.reshape(*grid_shape).cpu().numpy()
                         gt_occ   = gt_occ.reshape(*grid_shape).cpu().numpy()
                         occ_cam_mask = occ3d_mask_to_numpy(
-                            result_dict, 'occ_cam_mask', idx)
+                            result_dict, 'occ_cam_mask', idx, grid_shape)
                         occ_lidar_mask = occ3d_mask_to_numpy(
-                            result_dict, 'occ_lidar_mask', idx)
+                            result_dict, 'occ_lidar_mask', idx, grid_shape)
                         miou_metric.add_batch(
                             pred_occ, gt_occ, occ_lidar_mask, occ_cam_mask)
                     # breakpoint()
