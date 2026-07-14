@@ -4,6 +4,7 @@ OPENOCC_DATAWRAPPER = Registry('openocc_datawrapper')
 OPENOCC_TRANSFORMS = Registry('openocc_transforms')
 
 from .dataset import NuScenesDataset
+from .opus_target import PrepareOPUSTarget
 from .dataset_flow import NuScenesFlowDataset, SceneStream
 from .transform_3d import *
 from .sampler import CustomDistributedSampler

@@ -700,6 +700,12 @@ def main(local_rank, args):
                             gt_occ.reshape(1, *occ_shape),
                             f'val_{i_iter_val}_gt',
                             True, 0, dataset=args.dataset)
+                    if args.vis_opus_points and 'opus_points' in result_dict:
+                        np.savez_compressed(
+                            os.path.join(save_dir, f'val_{i_iter_val}_opus_points_{idx}.npz'),
+                            points=result_dict['opus_points'][idx].detach().cpu().numpy(),
+                            labels=result_dict['opus_labels'][idx].detach().cpu().numpy(),
+                            scores=result_dict['opus_scores'][idx].detach().cpu().numpy())
                     if args.vis_gaussian:
                         save_gaussian(
                             save_dir,
@@ -1408,6 +1414,8 @@ if __name__ == '__main__':
     parser.add_argument('--resume-from', type=str, default='')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--vis-occ', action='store_true', default=False)
+    parser.add_argument('--vis-opus-points', action='store_true', default=False,
+                        help='Save OPUS sparse points, labels and confidences as NPZ.')
     parser.add_argument('--vis-gaussian', action='store_true', default=False)
     parser.add_argument('--vis-gaussian-point', action='store_true', default=False,
                         help='使用点云形式可视化 Semantic Gaussian')

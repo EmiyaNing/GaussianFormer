@@ -35,6 +35,12 @@ def occ3d_mask_to_numpy(result_dict, key, idx):
         mask = mask[idx]
     return mask.cpu().numpy()
 
+
+def get_occ_grid_shape(cfg, result_dict):
+    if 'final_occ_grid' in result_dict:
+        return tuple(result_dict['final_occ_grid'].shape[1:])
+    return tuple(cfg.get('grid_shape', (200, 200, 16)))
+
 def main(local_rank, args):
     # global settings
     set_random_seed(args.seed)
@@ -181,8 +187,9 @@ def main(local_rank, args):
                         occ_mask = result_dict['occ_cam_mask'][idx].flatten()
                         miou_metric._after_step(pred_occ, gt_occ, occ_mask)
                     elif cfg.dataset_name_flag == 'occ3d':
-                        pred_occ = pred_occ.reshape(200, 200, 16).cpu().numpy()
-                        gt_occ   = gt_occ.reshape(200, 200, 16).cpu().numpy()
+                        grid_shape = get_occ_grid_shape(cfg, result_dict)
+                        pred_occ = pred_occ.reshape(*grid_shape).cpu().numpy()
+                        gt_occ   = gt_occ.reshape(*grid_shape).cpu().numpy()
                         occ_cam_mask = occ3d_mask_to_numpy(
                             result_dict, 'occ_cam_mask', idx)
                         occ_lidar_mask = occ3d_mask_to_numpy(

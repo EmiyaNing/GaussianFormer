@@ -1,0 +1,6 @@
+# OPUS uses the existing PyTorch/MMEngine environment.
+# The default loss is a bounded, chunked torch.cdist implementation and needs
+# no extra CUDA extension. It deterministically caps matching at 8192 points;
+# install one of the following before full-scale 76,800-point experiments:
+# pytorch3d  # optional GPU KNN backend
+# frnn       # optional GPU KNN backend
