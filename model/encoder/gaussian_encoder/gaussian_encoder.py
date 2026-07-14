@@ -133,7 +133,12 @@ class GaussianOccEncoder(BaseEncoder):
                     gaussian
                 )
 
-                prediction.append({'gaussian': gaussian})
+                densify_prediction = {'gaussian': gaussian}
+                if hasattr(self.layers[i], 'get_allocation_aux'):
+                    allocation_aux = self.layers[i].get_allocation_aux()
+                    if allocation_aux is not None:
+                        densify_prediction['allocation_aux'] = allocation_aux
+                prediction.append(densify_prediction)
                 if i != len(self.operation_order) - 1:
                     anchor_embed = self.anchor_encoder(anchor)
             elif "query" in op:

@@ -192,6 +192,12 @@ class GaussianHead(BaseTaskHead):
             final_prediction[final_occupancy] = final_semantics[final_occupancy]
         else:
             final_prediction = prediction[-1].argmax(dim=1)
+
+        allocation_aux = [
+            item['allocation_aux']
+            for item in representation
+            if 'allocation_aux' in item
+        ]
         
         return {
             'pred_occ': prediction,
@@ -206,5 +212,6 @@ class GaussianHead(BaseTaskHead):
             'occ_nonempty_mask': occ_nonempty_mask,
             'final_occ': final_prediction,
             'gaussian': representation[-1]['gaussian'],
-            'gaussians': [r['gaussian'] for r in representation]
+            'gaussians': [r['gaussian'] for r in representation],
+            'allocation_aux': allocation_aux,
         }
