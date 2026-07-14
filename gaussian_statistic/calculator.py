@@ -226,6 +226,73 @@ def compute_coverage_and_purity(
     return covered, p_match, p_total, extra_stats
 
 
+def compute_subset_coverage(
+    means, precomp, voxel_xyz, gaussian_mask,
+    cov_threshold=3.0, chunk_size=10000, use_fast_mahalanobis=True,
+    max_pair_elements=None,
+) -> torch.Tensor:
+    """Return the voxel union covered by a selected Gaussian subset.
+
+    Purity is only known after the first coverage pass.  This bounded second
+    pass avoids retaining all voxel-Gaussian hit pairs while still allowing
+    coverage to be attributed to the final low-purity Gaussian subset.
+    """
+    N, G = voxel_xyz.shape[0], means.shape[0]
+    device = means.device
+    if gaussian_mask.shape != (G,):
+        raise ValueError(
+            f'gaussian_mask must have shape ({G},), got {tuple(gaussian_mask.shape)}')
+
+    gaussian_mask = gaussian_mask.to(device=device, dtype=torch.bool)
+    selected_count = int(gaussian_mask.sum().item())
+    if N == 0 or selected_count == 0:
+        return torch.zeros(N, dtype=torch.bool, device=device)
+
+    subset_means = means[gaussian_mask]
+    subset_cov_inv = precomp['cov_inv'][gaussian_mask]
+    subset_R = precomp['R'][gaussian_mask]
+    subset_scales = precomp['scales_vec'][gaussian_mask]
+    subset_search_radius = precomp['search_radius'][gaussian_mask]
+    tau_sq = cov_threshold ** 2
+
+    chunk_size = max(1, int(chunk_size))
+    if max_pair_elements is not None:
+        chunk_size = min(
+            chunk_size,
+            max(1, int(max_pair_elements) // selected_count),
+        )
+
+    covered = torch.zeros(N, dtype=torch.bool, device=device)
+
+    for start in range(0, N, chunk_size):
+        end = min(start + chunk_size, N)
+        chunk_v = voxel_xyz[start:end]
+        dists = torch.cdist(chunk_v, subset_means)
+        candidate_pairs = (dists <= subset_search_radius[None, :]).nonzero(
+            as_tuple=False)
+        del dists
+        if candidate_pairs.shape[0] == 0:
+            continue
+
+        voxel_index, gaussian_index = candidate_pairs[:, 0], candidate_pairs[:, 1]
+        diff = chunk_v[voxel_index] - subset_means[gaussian_index]
+        if use_fast_mahalanobis:
+            rotated = torch.bmm(
+                subset_R[gaussian_index], diff.unsqueeze(-1)).squeeze(-1)
+            mahal = (
+                rotated / subset_scales[gaussian_index].clamp(min=1e-8)
+            ).pow(2).sum(dim=-1)
+        else:
+            mahal = torch.einsum(
+                'ki,kij,kj->k', diff, subset_cov_inv[gaussian_index], diff)
+
+        hit = mahal <= tau_sq
+        if hit.any():
+            covered[start + voxel_index[hit]] = True
+
+    return covered
+
+
 def compute_distancewise_coverage(means, scales, rotations, occ_xyz, occ_cam_mask,
     distance_bins, cov_threshold=3.0, precomp=None, chunk_size=10000,
     pred_class=None, exclude_classes=None):

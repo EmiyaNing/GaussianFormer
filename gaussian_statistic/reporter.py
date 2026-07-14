@@ -44,6 +44,15 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
             'Category coverage denominator consistency check failed: '
             f"category_total={category_coverage_debug.get('sum_category_total', 0):.0f}, "
             f"scalar_total={category_coverage_debug.get('scalar_cov_total', 0):.0f}")
+    mixed_sanity = stats.get('mixed_sem_sup_sanity', {})
+    failed_mixed_checks = [
+        key for key, value in mixed_sanity.items()
+        if key != 'all_scope_geometric_covered_voxel_count' and not value
+    ]
+    if failed_mixed_checks:
+        logger.warning(
+            'Mixed-Gaussian/Sem-Sup consistency check failed: '
+            + ', '.join(failed_mixed_checks))
     logger.info('─' * 60)
 
     # 基础指标
@@ -59,6 +68,21 @@ def report_statistics(stats: Dict, logger, work_dir: str) -> None:
         logger.info(f"  Unused Gaussian Ratio: {stats['unused_gaussian_ratio']:.6f}")
     else:
         logger.info(f"  Mean Purity:         {stats['mean_purity']:.6f}")
+
+    mixed = stats.get('mixed_gaussian')
+    sem_sup = stats.get('sem_sup')
+    if mixed and sem_sup:
+        rho = mixed['purity_threshold_rho']
+        logger.info(f"  Mixed-Gaussian (rho={rho:.3f}, all): {mixed['ratio_all']:.6f}")
+        logger.info(f"  Mixed-Gaussian (valid-only): {mixed['ratio_valid']:.6f}")
+        logger.info(
+            f"  Mixed Gaussian Count: {mixed['mixed_count']} / "
+            f"{mixed['evaluated_gaussian_count']}")
+        logger.info(f"  Sem-Sup:             {sem_sup['ratio']:.6f}")
+        logger.info(f"  Mean Frame Sem-Sup:  {sem_sup['mean_frame_ratio']:.6f}")
+        logger.info(
+            f"  Sem-Sup Voxel Count: {sem_sup['covered_voxel_count']} / "
+            f"{sem_sup['occupied_voxel_count']}")
 
     logger.info('─' * 60)
     logger.info('  [Scale Percentiles]')

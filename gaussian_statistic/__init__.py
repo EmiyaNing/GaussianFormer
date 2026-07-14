@@ -10,6 +10,7 @@ from .calculator import (
     compute_distancewise_coverage,
     precompute_frame_data,
     compute_coverage_and_purity,
+    compute_subset_coverage,
 )
 from .aggregator import GaussianStatAggregator
 from .reporter import report_statistics

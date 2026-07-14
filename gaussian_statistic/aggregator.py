@@ -21,7 +21,8 @@ class GaussianStatAggregator:
                  exclude_voxel_classes: Optional[List[int]] = None,
                  scale_range: Optional[List[float]] = None,
                  max_pair_elements: int = 64_000_000,
-                 histogram_bins: int = 4096):
+                 histogram_bins: int = 4096,
+                 purity_threshold_rho: float = 0.5):
         self.t_sphere = t_sphere; self.t_scale = t_scale
         self.distance_bins = distance_bins or [0, 10, 20, 30, 40, 50]
         self.percentiles = percentiles or [50, 75, 90, 95]
@@ -32,6 +33,9 @@ class GaussianStatAggregator:
         self.scale_range = scale_range
         self.max_pair_elements = max(1, int(max_pair_elements))
         self.histogram_bins = max(64, int(histogram_bins))
+        self.purity_threshold_rho = float(purity_threshold_rho)
+        if not 0.0 <= self.purity_threshold_rho <= 1.0:
+            raise ValueError('purity_threshold_rho must be in [0, 1]')
         self._histogram_ranges = self._get_histogram_ranges(scale_range)
         # 拆分 exclude_classes 为 Gaussian 过滤和 Voxel 过滤
         self.exclude_gaussian_classes = exclude_gaussian_classes if exclude_gaussian_classes is not None else exclude_classes
@@ -51,6 +55,15 @@ class GaussianStatAggregator:
         self.total_penalized_purity_sum = 0.0  # 全局惩罚版（unused=0.0）
         self.total_unused_gaussians = 0
         self.total_purity_gaussians = 0
+        # Mixed-Gaussian / Sem-Sup 累加器
+        self.total_mixed_gaussians = 0
+        self.total_mixed_evaluated_gaussians = 0
+        self.total_purity_defined_gaussians = 0
+        self.total_sem_sup_covered = 0
+        self.total_sem_sup_voxels = 0
+        self.total_sem_sup_reference_covered = 0
+        self.sum_frame_sem_sup = 0.0
+        self.sem_sup_frame_count = 0
         # Coverage 累加器
         self.total_cov_covered = 0.0
         self.total_cov_total = 0
@@ -256,14 +269,11 @@ class GaussianStatAggregator:
         # ---- 按语义类别过滤 Gaussian ----
         if self._exclude_gaussian_classes_tensor is not None:
             keep = ~torch.isin(pred_class, self._exclude_gaussian_classes_tensor)
-            if keep.any():
-                means = means[keep]
-                scales = scales[keep]
-                rotations = rotations[keep]
-                semantics = semantics[keep]
-                pred_class = pred_class[keep]
-            else:
-                return  # 所有 Gaussian 都被过滤，跳过此帧
+            means = means[keep]
+            scales = scales[keep]
+            rotations = rotations[keep]
+            semantics = semantics[keep]
+            pred_class = pred_class[keep]
 
         # ---- 构建有效体素 mask（occ_cam_mask + 排除 empty + 排除 voxel 类别） ----
         occ_flat_xyz = occ_xyz.reshape(-1, 3)
@@ -303,6 +313,35 @@ class GaussianStatAggregator:
             voxel_bin_idx=torch.where(valid_b, bin_idx, torch.full_like(bin_idx, -1)),
             n_bins=n_bins, return_extra_stats=True,
             max_pair_elements=self.max_pair_elements)
+
+        # ---- Mixed-Gaussian + Sem-Sup ----
+        # Purity 对 unused Gaussian (purity_total == 0) 未定义，因此 unused
+        # 只保留在 all denominator 中，不进入 mixed numerator。
+        valid_g = purity_total > 0
+        purity_g = torch.zeros_like(purity_total, dtype=torch.float32)
+        purity_g[valid_g] = (
+            purity_match[valid_g].float()
+            / purity_total[valid_g].float().clamp_min(1))
+        mixed_g = valid_g & (purity_g < self.purity_threshold_rho)
+
+        mixed_covered = calculator.compute_subset_coverage(
+            means, precomp, valid_xyz, mixed_g,
+            cov_threshold=self.cov_threshold,
+            chunk_size=self.chunk_size,
+            max_pair_elements=self.max_pair_elements)
+
+        n_mixed = mixed_g.sum().item()
+        n_defined = valid_g.sum().item()
+        frame_sem_sup_covered = mixed_covered.sum().item()
+        frame_sem_sup_total = valid_xyz.shape[0]
+        self.total_mixed_gaussians += n_mixed
+        self.total_mixed_evaluated_gaussians += purity_total.numel()
+        self.total_purity_defined_gaussians += n_defined
+        self.total_sem_sup_covered += frame_sem_sup_covered
+        self.total_sem_sup_voxels += frame_sem_sup_total
+        self.total_sem_sup_reference_covered += covered.sum().item()
+        self.sum_frame_sem_sup += frame_sem_sup_covered / frame_sem_sup_total
+        self.sem_sup_frame_count += 1
 
         # Distance-wise Coverage：GPU 端 bucketize + scatter_add
         ones_n_long = torch.ones(valid_xyz.shape[0], device=device, dtype=torch.long)
@@ -344,8 +383,7 @@ class GaussianStatAggregator:
             # ---- 新版 Purity 累加（P0-2） ----
             # 将所有 Gaussian 标记为 unused 或 valid
             n_g = purity_total.shape[0]
-            valid_g = purity_total > 0
-            n_valid = valid_g.sum().item()
+            n_valid = n_defined
             n_unused = n_g - n_valid
 
             # 旧版兼容：unused Gaussian 视为 1.0
@@ -388,6 +426,15 @@ class GaussianStatAggregator:
                 'mean_purity_old': _s(self.total_purity_sum, self.total_gaussians),
                 'mean_purity_valid': _s(self.total_valid_purity_sum, self.total_valid_purity_count),
                 'mean_purity_penalized': _s(self.total_penalized_purity_sum, self.total_purity_gaussians),
+                'mixed_gaussian_ratio': _s(
+                    self.total_mixed_gaussians,
+                    self.total_mixed_evaluated_gaussians),
+                'mixed_gaussian_valid_ratio': _s(
+                    self.total_mixed_gaussians,
+                    self.total_purity_defined_gaussians),
+                'sem_sup': _s(
+                    self.total_sem_sup_covered,
+                    self.total_sem_sup_voxels),
                 'unused_ratio': _s(self.total_unused_gaussians, self.total_purity_gaussians)}
 
     # ------------------------------------------------------------------
@@ -451,6 +498,61 @@ class GaussianStatAggregator:
                   # 元数据
                   'cov_threshold': self.cov_threshold,
                   'coverage_voxel_scope': 'non_empty_visible' if self.ignore_empty else 'visible'}
+
+        mixed_ratio_all = _s(
+            self.total_mixed_gaussians,
+            self.total_mixed_evaluated_gaussians)
+        mixed_ratio_valid = _s(
+            self.total_mixed_gaussians,
+            self.total_purity_defined_gaussians)
+        sem_sup_ratio = _s(
+            self.total_sem_sup_covered,
+            self.total_sem_sup_voxels)
+        result['mixed_gaussian'] = {
+            'purity_threshold_rho': self.purity_threshold_rho,
+            'comparison': 'purity < rho',
+            'unused_policy': 'excluded_from_numerator_kept_in_all_denominator',
+            'mixed_count': int(self.total_mixed_gaussians),
+            'evaluated_gaussian_count': int(
+                self.total_mixed_evaluated_gaussians),
+            'purity_defined_gaussian_count': int(
+                self.total_purity_defined_gaussians),
+            'ratio_all': mixed_ratio_all,
+            'ratio_valid': mixed_ratio_valid,
+        }
+        result['sem_sup'] = {
+            'purity_threshold_rho': self.purity_threshold_rho,
+            'covered_voxel_count': int(self.total_sem_sup_covered),
+            'occupied_voxel_count': int(self.total_sem_sup_voxels),
+            'ratio': sem_sup_ratio,
+            'mean_frame_ratio': _s(
+                self.sum_frame_sem_sup,
+                self.sem_sup_frame_count),
+            'frame_count': int(self.sem_sup_frame_count),
+            'voxel_scope': (
+                'non_empty_visible_all_distance'
+                if self.ignore_empty else 'visible_all_distance'),
+            'coverage_rule': 'union_of_geometric_hits_from_mixed_gaussians',
+        }
+        result['mixed_sem_sup_sanity'] = {
+            'mixed_not_above_defined': (
+                self.total_mixed_gaussians
+                <= self.total_purity_defined_gaussians),
+            'defined_not_above_evaluated': (
+                self.total_purity_defined_gaussians
+                <= self.total_mixed_evaluated_gaussians),
+            'sem_sup_covered_not_above_total': (
+                self.total_sem_sup_covered <= self.total_sem_sup_voxels),
+            'sem_sup_not_above_geometric_coverage': (
+                self.total_sem_sup_covered
+                <= self.total_sem_sup_reference_covered),
+            'all_ratios_in_unit_interval': (
+                0.0 <= mixed_ratio_all <= 1.0
+                and 0.0 <= mixed_ratio_valid <= 1.0
+                and 0.0 <= sem_sup_ratio <= 1.0),
+            'all_scope_geometric_covered_voxel_count': int(
+                self.total_sem_sup_reference_covered),
+        }
 
         result['scale_sanity'] = {
             'configured_scale_range': self.scale_range,
