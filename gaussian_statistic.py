@@ -146,6 +146,8 @@ def main(local_rank, args):
     logger.info(f'num_classes for Gaussian statistics: {num_classes}')
     logger.info(f'empty_label for occupancy statistics: {args.empty_label}')
     logger.info(f'ignore_empty for coverage/purity: {args.ignore_empty}')
+    logger.info(f'purity threshold rho: {args.purity_threshold_rho}')
+    logger.info('Mixed-Gaussian rule: valid purity < rho')
     aggregator = GaussianStatAggregator(
         t_sphere=args.t_sphere,
         t_scale=args.t_scale,
@@ -162,6 +164,7 @@ def main(local_rank, args):
         scale_range=cfg.get('scale_range', None),
         max_pair_elements=args.max_pair_elements,
         histogram_bins=args.histogram_bins,
+        purity_threshold_rho=args.purity_threshold_rho,
     )
 
     stat_freq = args.stat_freq
@@ -207,12 +210,15 @@ def main(local_rank, args):
                         f'Cov: {snap["mean_coverage"]:.4f} | '
                         f'Purity(valid): {snap.get("mean_purity_valid", 0):.4f} | '
                         f'Purity(penalized): {snap.get("mean_purity_penalized", 0):.4f} | '
-                        f'Purity(old): {snap.get("mean_purity_old", 0):.4f}'
+                        f'Purity(old): {snap.get("mean_purity_old", 0):.4f} | '
+                        f'Mixed-G: {snap.get("mixed_gaussian_ratio", 0):.4f} | '
+                        f'Mixed-G(valid): {snap.get("mixed_gaussian_valid_ratio", 0):.4f} | '
+                        f'Sem-Sup: {snap.get("sem_sup", 0):.4f}'
                     )
                 else:
                     logger.info(f'[STAT] Iter {i_iter_val:5d} (no frames yet)')
 
-            # The aggregator keeps only bounded streaming summaries. Releasing
+            # The aggregator kebounded streaming summaries. Releasing
             # frame-local references here prevents delayed Python reclamation
             # from extending the peak across validation iterations.
             del gaussian, representation, input_imgs, metas, data
@@ -240,6 +246,8 @@ if __name__ == '__main__':
                         help='Large Gaussian 尺寸阈值（s_hat > t_scale 视为大高斯）')
     parser.add_argument('--cov-threshold', type=float, default=1.0,
                         help='Coverage 马氏距离阈值（默认 1.0，对应 1σ 椭球）')
+    parser.add_argument('--purity-threshold-rho', type=float, default=0.5,
+                        help='Mixed-Gaussian 阈值，严格使用 valid purity < rho')
     parser.add_argument('--distance-bins', type=float, nargs='+',
                         default=[0, 10, 20, 30, 40, 50],
                         help='距离分桶边界，如: 0 10 20 30 40 50 70')
@@ -268,6 +276,8 @@ if __name__ == '__main__':
                         help='语义类别数；None 表示从模型自动推断')
 
     args = parser.parse_args()
+    if not 0.0 <= args.purity_threshold_rho <= 1.0:
+        parser.error('--purity-threshold-rho must be in [0, 1]')
 
     ngpus = torch.cuda.device_count()
     args.gpus = ngpus

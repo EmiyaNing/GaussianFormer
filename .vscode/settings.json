@@ -1,0 +1,16 @@
+{
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "files.watcherExclude": {
+        "**/data/**": true,
+        "**/out/**": true,
+        "**/ckpts/**": true,
+        "**/.worktrees/**": true,
+        "**/__pycache__/**": true
+    },
+    "search.exclude": {
+        "**/data/**": true,
+        "**/out/**": true,
+        "**/ckpts/**": true,
+        "**/.worktrees/**": true
+    }
+}
