@@ -13,8 +13,13 @@ def _sample_image_features(feature_maps, points, metas):
     homogeneous = torch.cat([points, torch.ones_like(points[..., :1])], dim=-1)
     camera_points = torch.einsum('bnij,bqj->bnqi', projection, homogeneous)
     depth = camera_points[..., 2:3]
-    uv = camera_points[..., :2] / depth.clamp_min(1e-5)
-    valid = (depth[..., 0] > 1e-5)
+    # Do not feed enormous or non-finite grids to grid_sample. Invalid points
+    # are masked later, but CUDA grid_sample still differentiates its grid.
+    valid_depth = depth[..., 0] > 1e-3
+    safe_depth = torch.where(valid_depth.unsqueeze(-1), depth,
+                             torch.ones_like(depth))
+    uv = camera_points[..., :2] / safe_depth
+    valid = valid_depth
     valid = valid & (uv[..., 0] >= 0) & (uv[..., 0] < image_wh[:, :, None, 0])
     valid = valid & (uv[..., 1] >= 0) & (uv[..., 1] < image_wh[:, :, None, 1])
 
@@ -23,6 +28,10 @@ def _sample_image_features(feature_maps, points, metas):
     for feature in feature_maps:
         _, num_cams, channels, height, width = feature.shape
         grid = uv / image_wh[:, :, None, :] * 2.0 - 1.0
+        # A finite location outside the image has zero sampled value and a
+        # well-defined gradient. It replaces every invalid projection.
+        grid = torch.where(valid[..., None], grid, torch.full_like(grid, 2.0))
+        grid = torch.nan_to_num(grid, nan=2.0, posinf=2.0, neginf=-2.0).clamp(-2.0, 2.0)
         sampled = F.grid_sample(
             feature.reshape(batch_size * num_cams, channels, height, width),
             grid.reshape(batch_size * num_cams, num_queries, 1, 2),

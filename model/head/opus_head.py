@@ -45,7 +45,10 @@ class OPUSHead(BaseTaskHead):
             pred_points.append(self._to_world(points.flatten(1, 2)))
             pred_logits.append(logits.flatten(1, 2))
 
-        final_occ = self.rasterizer(pred_points[-1], pred_logits[-1], self.score_threshold)
+        # Rasterization is an eval/visualization adapter and must not retain a
+        # large, unused autograd graph during OPUS set-loss training.
+        final_occ = self.rasterizer(
+            pred_points[-1].detach(), pred_logits[-1].detach(), self.score_threshold)
         result = {
             'opus_pred_points': pred_points,
             'opus_pred_logits': pred_logits,

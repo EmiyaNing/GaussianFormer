@@ -48,6 +48,13 @@ def select_occ3d_eval_mask(result_dict, idx, cfg):
     return mask.flatten() if mask is not None else None
 
 
+def find_nonfinite_gradients(model):
+    return [
+        name for name, parameter in model.named_parameters()
+        if parameter.grad is not None and not torch.isfinite(parameter.grad).all()
+    ]
+
+
 def main(local_rank, args):
     # global settings
     set_random_seed(args.seed)
@@ -269,6 +276,12 @@ def main(local_rank, args):
             if not amp:
                 loss.backward()
                 if (global_iter + 1) % grad_accumulation == 0:
+                    if cfg.get('fail_on_nonfinite_grad', False):
+                        bad_gradients = find_nonfinite_gradients(my_model)
+                        if bad_gradients:
+                            raise FloatingPointError(
+                                f'Non-finite gradients at global_iter={global_iter}: '
+                                + ', '.join(bad_gradients[:20]))
                     grad_norm = torch.nn.utils.clip_grad_norm_(
                         my_model.parameters(), cfg.grad_max_norm,
                         error_if_nonfinite=cfg.get('fail_on_nonfinite_grad', False))
@@ -278,6 +291,12 @@ def main(local_rank, args):
                 scaler.scale(loss).backward()
                 if (global_iter + 1) % grad_accumulation == 0:
                     scaler.unscale_(optimizer)
+                    if cfg.get('fail_on_nonfinite_grad', False):
+                        bad_gradients = find_nonfinite_gradients(my_model)
+                        if bad_gradients:
+                            raise FloatingPointError(
+                                f'Non-finite gradients at global_iter={global_iter}: '
+                                + ', '.join(bad_gradients[:20]))
                     grad_norm = torch.nn.utils.clip_grad_norm_(
                         my_model.parameters(), cfg.grad_max_norm,
                         error_if_nonfinite=cfg.get('fail_on_nonfinite_grad', False))
