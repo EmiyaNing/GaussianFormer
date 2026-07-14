@@ -208,3 +208,4 @@ class GaussianHead(BaseTaskHead):
             'gaussian': representation[-1]['gaussian'],
             'gaussians': [r['gaussian'] for r in representation]
         }
+
