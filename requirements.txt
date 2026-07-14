@@ -1,0 +1,13 @@
+# Core runtime tested by the original project.
+torch==2.0.0
+torchvision==0.15.1
+torchaudio==2.0.1
+mmcv==2.0.1
+mmdet==3.0.0
+mmsegmentation==1.0.0
+mmdet3d==1.1.1
+spconv-cu117
+timm
+pyquaternion
+tensorboard
+frnn

@@ -337,6 +337,8 @@ def main(local_rank, args):
         my_model.eval()
         os.environ['eval'] = 'true'
         val_loss_list = []
+        val_detail_sum = {}
+        val_detail_count = {}
 
         with torch.no_grad():
             for i_iter_val, data in enumerate(val_dataset_loader):
@@ -356,6 +358,14 @@ def main(local_rank, args):
                         loss_input.update({
                             loss_input_key: result_dict[loss_input_val]})
                     loss, loss_dict = loss_func(loss_input)
+                    for loss_name, loss_value in loss_dict.items():
+                        if np.isfinite(loss_value):
+                            val_detail_sum[loss_name] = (
+                                val_detail_sum.get(loss_name, 0.0) + loss_value
+                            )
+                            val_detail_count[loss_name] = (
+                                val_detail_count.get(loss_name, 0) + 1
+                            )
                 
                 if 'final_occ' in result_dict:
                     for idx, pred in enumerate(result_dict['final_occ']):
@@ -378,8 +388,28 @@ def main(local_rank, args):
                     logger.info(detailed_loss)
                         
         miou, iou2 = miou_metric._after_epoch()
+        if distributed:
+            gathered_details = [None for _ in range(world_size)]
+            dist.all_gather_object(
+                gathered_details,
+                (val_detail_sum, val_detail_count),
+            )
+            val_detail_sum = {}
+            val_detail_count = {}
+            for rank_sum, rank_count in gathered_details:
+                for name, value in rank_sum.items():
+                    val_detail_sum[name] = val_detail_sum.get(name, 0.0) + value
+                    val_detail_count[name] = (
+                        val_detail_count.get(name, 0) + rank_count[name]
+                    )
         logger.info(f'mIoU: {miou}, iou2: {iou2}')
         logger.info('Current val loss is %.3f' % (np.mean(val_loss_list)))
+        if val_detail_sum:
+            averaged_details = [
+                f'{name}: {val_detail_sum[name] / val_detail_count[name]:.5f}'
+                for name in sorted(val_detail_sum)
+            ]
+            logger.info('[EVAL] Averaged losses/metrics: ' + ', '.join(averaged_details))
         miou_metric.reset()
     
     if writer is not None:

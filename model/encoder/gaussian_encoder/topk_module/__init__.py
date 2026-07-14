@@ -1,3 +1,1 @@
-from .adaptive_allocationv4 import AdaptiveAllocationV4
-from .adaptive_allocationv5 import AdaptiveAllocationV5
 from .adaptive_allocationv6 import AdaptiveAllocationV6
