@@ -80,8 +80,8 @@ model = dict(
 
 loss = dict(type='MultiLoss', loss_cfgs=[
     dict(type='OPUSSetLoss', stage_weights=[0.25, 0.35, 0.5, 0.7, 0.85, 1.0],
-         lambda_cd=1.0, lambda_cls=1.0, focal_gamma=2.0,
-         voxel_size=grid_size, chunk_size=1024, max_match_points=8192),
+         lambda_cd=5.0, lambda_cls=1.0, focal_gamma=2.0,
+         pc_range=pc_range, chunk_size=1024, max_match_points=8192),
 ])
 loss_input_convertion = dict(
     opus_pred_points='opus_pred_points', opus_pred_logits='opus_pred_logits')
@@ -90,6 +90,7 @@ optimizer = dict(
     optimizer=dict(type='AdamW', lr=2e-4, weight_decay=0.01),
     paramwise_cfg=dict(custom_keys={'img_backbone': dict(lr_mult=0.1)}))
 amp = True
+fail_on_nonfinite_grad = True
 grad_max_norm = 35
 max_epochs = 100
 eval_every_epochs = 1

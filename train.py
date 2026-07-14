@@ -261,18 +261,26 @@ def main(local_rank, args):
                     loss_input.update({
                         loss_input_key: result_dict[loss_input_val]})
                 loss, loss_dict = loss_func(loss_input)
+                if (cfg.get('fail_on_nonfinite_grad', False) and
+                        not torch.isfinite(loss)):
+                    raise FloatingPointError(
+                        f'Non-finite loss at global_iter={global_iter}: {loss.item()}')
                 loss = loss / grad_accumulation
             if not amp:
                 loss.backward()
                 if (global_iter + 1) % grad_accumulation == 0:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(my_model.parameters(), cfg.grad_max_norm)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        my_model.parameters(), cfg.grad_max_norm,
+                        error_if_nonfinite=cfg.get('fail_on_nonfinite_grad', False))
                     optimizer.step()
                     optimizer.zero_grad()
             else:
                 scaler.scale(loss).backward()
                 if (global_iter + 1) % grad_accumulation == 0:
                     scaler.unscale_(optimizer)
-                    grad_norm = torch.nn.utils.clip_grad_norm_(my_model.parameters(), cfg.grad_max_norm)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        my_model.parameters(), cfg.grad_max_norm,
+                        error_if_nonfinite=cfg.get('fail_on_nonfinite_grad', False))
                     scaler.step(optimizer)
                     scaler.update()
                     optimizer.zero_grad()

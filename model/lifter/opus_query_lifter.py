@@ -20,7 +20,10 @@ class OPUSQueryLifter(BaseModule):
 
     def init_weights(self):
         nn.init.xavier_uniform_(self.query_features)
-        nn.init.uniform_(self.reference_points, -1.0, 1.0)
+        # Initialize uniformly in model space. Sampling logits directly in
+        # [-1, 1] only covers [0.27, 0.73] after sigmoid and misses boundaries.
+        points = torch.empty_like(self.reference_points).uniform_(0.01, 0.99)
+        self.reference_points.data.copy_(torch.logit(points))
 
     def forward(self, ms_img_feats, **kwargs):
         batch_size = ms_img_feats[0].shape[0]
