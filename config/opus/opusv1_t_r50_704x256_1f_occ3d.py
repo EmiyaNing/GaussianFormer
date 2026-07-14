@@ -89,7 +89,10 @@ loss_input_convertion = dict(
 optimizer = dict(
     optimizer=dict(type='AdamW', lr=2e-4, weight_decay=0.01),
     paramwise_cfg=dict(custom_keys={'img_backbone': dict(lr_mult=0.1)}))
-amp = True
+# The sparse set loss and six-stage decoder are numerically sensitive during
+# cold start. Keep the reference baseline in FP32; enable AMP only after a
+# stable checkpoint and a separately tuned GradScaler configuration exist.
+amp = False
 fail_on_nonfinite_grad = True
 grad_max_norm = 35
 max_epochs = 100
