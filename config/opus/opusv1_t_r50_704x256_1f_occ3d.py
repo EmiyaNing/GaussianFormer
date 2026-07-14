@@ -94,4 +94,4 @@ grad_max_norm = 35
 max_epochs = 100
 eval_every_epochs = 1
 warmup_iters = 500
-load_from = None
+load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
