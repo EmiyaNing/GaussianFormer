@@ -9,7 +9,7 @@ pc_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
 grid_size = 0.4
 grid_shape = [200, 200, 16]
 input_shape = (704, 256)
-batch_size = 1
+batch_size = 4
 max_gt_points = 76800
 
 data_aug_conf = dict(
@@ -57,8 +57,8 @@ val_dataset_config = dict(
     imageset=anno_root + 'nuscenes_infos_val_sweeps_occ.pkl',
     data_aug_conf=data_aug_conf, pipeline=test_pipeline, pc_range=pc_range,
     occ3d=True, occ3d_coord='ego', phase='val', return_keys=occ3d_return_keys)
-train_loader = dict(batch_size=batch_size, num_workers=2, shuffle=True)
-val_loader = dict(batch_size=batch_size, num_workers=2)
+train_loader = dict(batch_size=batch_size, num_workers=4, shuffle=True)
+val_loader = dict(batch_size=batch_size, num_workers=4)
 
 model = dict(
     type='OPUSSegmentor', img_backbone_out_indices=[0, 1, 2, 3],
