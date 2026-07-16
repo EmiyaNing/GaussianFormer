@@ -29,4 +29,16 @@ class PrepareOPUSTarget:
         results['opus_gt_points'] = points[selected].astype(np.float32, copy=False)
         results['opus_gt_labels'] = labels[selected].astype(np.int64, copy=False)
         results['opus_gt_valid'] = selected_valid
+        # OPUS-V1 keeps every occupied voxel as a geometric target and uses
+        # camera visibility only to adapt the GT-to-prediction penalty.  Keep
+        # this bit alongside the compact target instead of losing it during
+        # the fixed-budget packing step.
+        camera_mask = results.get('occ_cam_mask')
+        if camera_mask is None:
+            selected_camera_valid = np.ones(self.max_gt_points, dtype=bool)
+        else:
+            selected_camera_valid = camera_mask.reshape(-1)[selected].astype(
+                bool, copy=False)
+            selected_camera_valid &= selected_valid
+        results['opus_gt_camera_valid'] = selected_camera_valid
         return results

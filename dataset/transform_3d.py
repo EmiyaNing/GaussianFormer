@@ -371,11 +371,13 @@ class LoadMultiViewImageHistory(object):
         to_float32 (bool): Whether to convert images to float32. Defaults to True.
     """
 
-    def __init__(self, num_history, num_cams=6, color_type='unchanged', to_float32=True):
+    def __init__(self, num_history, num_cams=6, color_type='unchanged', to_float32=True,
+                 pad_history=False):
         self.num_history = num_history
         self.num_cams = num_cams
         self.color_type = color_type
         self.to_float32 = to_float32
+        self.pad_history = pad_history
 
     def __call__(self, results):
         # Convert numpy arrays to lists so we can append history entries.
@@ -423,6 +425,18 @@ class LoadMultiViewImageHistory(object):
                 if num_history_frame >= self.num_history:
                     break
 
+        # The encoder consumes a fixed [T * 6] camera dimension.  Scene
+        # starts have fewer real sweeps, so repeat the current frame instead
+        # of producing ragged batches or silently dropping those samples.
+        if self.pad_history and num_history_frame < self.num_history:
+            current_imgs = list(results['img'][:self.num_cams])
+            current_lidar2img = list(results['lidar2img'][:self.num_cams])
+            current_ego2img = list(results['ego2img'][:self.num_cams])
+            for _ in range(self.num_history - num_history_frame):
+                results['img'].extend([image.copy() for image in current_imgs])
+                results['lidar2img'].extend([matrix.copy() for matrix in current_lidar2img])
+                results['ego2img'].extend([matrix.copy() for matrix in current_ego2img])
+
         results['num_current_img'] = self.num_cams
         results['num_history_frame'] = num_history_frame
         results['img_shape'] = [x.shape[:2] for x in results['img']]
@@ -433,7 +447,7 @@ class LoadMultiViewImageHistory(object):
         repr_str += f'(num_history={self.num_history}, '
         repr_str += f'num_cams={self.num_cams}, '
         repr_str += f"color_type='{self.color_type}', "
-        repr_str += f'to_float32={self.to_float32})'
+        repr_str += f'to_float32={self.to_float32}, pad_history={self.pad_history})'
         return repr_str
 
 

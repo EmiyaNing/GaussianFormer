@@ -1,2 +1,2 @@
 from .gaussian_encoder import *
-from .opus_encoder import OPUSEncoder
+from .opus_encoder import OPUSEncoder, OfficialOPUSV1Encoder

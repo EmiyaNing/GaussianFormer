@@ -21,7 +21,7 @@ img_norm_cfg = dict(mean=[123.675, 116.28, 103.53],
 occ3d_return_keys = [
     'img', 'projection_mat', 'image_wh', 'occ_label', 'occ_xyz',
     'occ_cam_mask', 'occ_lidar_mask', 'occ_nonempty_mask', 'occ_loss_mask',
-    'opus_gt_points', 'opus_gt_labels', 'opus_gt_valid',
+    'opus_gt_points', 'opus_gt_labels', 'opus_gt_valid', 'opus_gt_camera_valid',
 ]
 
 train_pipeline = [
@@ -67,21 +67,25 @@ model = dict(
         norm_cfg=dict(type='BN2d', requires_grad=False), norm_eval=True,
         style='caffe', with_cp=True),
     img_neck=dict(type='FPN', in_channels=[256, 512, 1024, 2048],
-        out_channels=128, start_level=0, num_outs=4,
+        out_channels=256, start_level=0, num_outs=4,
         add_extra_convs='on_output', relu_before_extra_convs=True),
-    lifter=dict(type='OPUSQueryLifter', num_queries=600, embed_dims=128),
-    encoder=dict(type='OPUSEncoder', embed_dims=128, num_decoder=6,
-        num_heads=8, feedforward_channels=512, dropout=0.1, point_step=0.08),
-    head=dict(type='OPUSHead', embed_dims=128, num_classes=17,
+    lifter=dict(type='OPUSQueryLifter', num_queries=600, embed_dims=256),
+    encoder=dict(type='OfficialOPUSV1Encoder', embed_dims=256, num_decoder=6,
+        num_heads=8, feedforward_channels=512, dropout=0.1,
+        num_refines=[1, 4, 16, 32, 64, 128], pc_range=pc_range),
+    head=dict(type='OPUSHead', embed_dims=256, num_classes=17,
         point_multipliers=[1, 4, 16, 32, 64, 128], pc_range=pc_range,
         grid_size=grid_size, grid_shape=grid_shape, empty_label=17,
-        score_threshold=0.0),
+        score_threshold=0.5, center_distance_threshold=3.0, padding=True),
 )
 
 loss = dict(type='MultiLoss', loss_cfgs=[
-    dict(type='OPUSSetLoss', stage_weights=[0.25, 0.35, 0.5, 0.7, 0.85, 1.0],
-         lambda_cd=5.0, lambda_cls=1.0, focal_gamma=2.0,
-         pc_range=pc_range, chunk_size=1024, max_match_points=8192),
+    dict(type='OPUSSetLoss', stage_weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+         loss_mode='official_v1', lambda_cls=2.0, focal_gamma=2.0,
+         smooth_l1_beta=0.2, lambda_pts=0.5, empty_dist_thr=0.2,
+         empty_weight=5.0, rare_classes=[0, 2, 5, 8], rare_weight=10.0,
+         class_weights=[10, 5, 10, 5, 5, 10, 10, 5, 10, 5, 5, 1, 5, 1, 1, 2, 1],
+         pc_range=pc_range, chunk_size=1024),
 ])
 loss_input_convertion = dict(
     opus_pred_points='opus_pred_points', opus_pred_logits='opus_pred_logits')

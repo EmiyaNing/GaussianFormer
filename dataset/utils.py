@@ -62,7 +62,11 @@ def get_lidar2global(calib_dict, pose_dict):
 def custom_collate_fn_temporal(instances):
     return_dict = {}
     for k, v in instances[0].items():
-        if isinstance(v, np.ndarray):
+        if k == 'lidar_points':
+            # Sweeps contain a different number of points per sample. Keep the
+            # batch ragged; sparse voxelization is performed sample by sample.
+            return_dict[k] = [instance[k] for instance in instances]
+        elif isinstance(v, np.ndarray):
             return_dict[k] = torch.stack([
                 torch.from_numpy(instance[k]) for instance in instances])
         elif isinstance(v, torch.Tensor):
@@ -76,5 +80,4 @@ def custom_collate_fn_temporal(instances):
         else:
             raise NotImplementedError
     return return_dict
-
 
