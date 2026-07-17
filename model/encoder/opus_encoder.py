@@ -512,8 +512,27 @@ class _StrictOPUSSelfAttention(nn.Module):
         distance = torch.cdist(decoded, decoded)
         tau = self.gen_tau(query_features).permute(0, 2, 1)
         mask = (-distance[:, None] * tau[..., None]).flatten(0, 1)
-        output, _ = self.attention(query_features, query_features, query_features,
-                                   attn_mask=mask, need_weights=False)
+        # Official MMCV attention consumes [B * heads, Q, Q].  PyTorch 2.0's
+        # eval/no_grad native-MHA fast path forwards that 3-D mask unchanged
+        # to a kernel expecting [B, heads, Q, Q], while its training fallback
+        # correctly accepts the official layout.  Disable only that fast path
+        # for this call to keep train/eval and PyTorch versions consistent.
+        mha_backend = getattr(torch.backends, 'mha', None)
+        disable_fastpath = (
+            not self.training and not torch.is_grad_enabled() and
+            mha_backend is not None and
+            hasattr(mha_backend, 'get_fastpath_enabled') and
+            hasattr(mha_backend, 'set_fastpath_enabled'))
+        previous_fastpath = None
+        if disable_fastpath:
+            previous_fastpath = mha_backend.get_fastpath_enabled()
+            mha_backend.set_fastpath_enabled(False)
+        try:
+            output, _ = self.attention(query_features, query_features, query_features,
+                                       attn_mask=mask, need_weights=False)
+        finally:
+            if disable_fastpath:
+                mha_backend.set_fastpath_enabled(previous_fastpath)
         # MMCV's MultiheadAttention adds the identity internally.
         return query_features + output
 

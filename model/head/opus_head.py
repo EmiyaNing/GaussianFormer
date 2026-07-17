@@ -90,11 +90,14 @@ class OPUSHead(BaseTaskHead):
         # raw values from metas directly, so this does not alter supervision.
         sampled_xyz = self._flatten_voxel_tensor(metas.get('occ_xyz'), keep_last_dim=True)
         sampled_label = self._flatten_voxel_tensor(metas.get('occ_label'))
-        occ_mask = self._flatten_voxel_tensor(metas.get('occ_mask'))
-        occ_cam_mask = self._flatten_voxel_tensor(metas.get('occ_cam_mask'))
-        occ_lidar_mask = self._flatten_voxel_tensor(metas.get('occ_lidar_mask'))
-        occ_nonempty_mask = self._flatten_voxel_tensor(metas.get('occ_nonempty_mask'))
-        occ_loss_mask = self._flatten_voxel_tensor(metas.get('occ_loss_mask'))
+        # Keep occupancy masks in their dataset layout.  The evaluator selects
+        # an individual batch item and flattens it beside ``final_occ``; doing
+        # it here loses the batch/layout distinction for tail batches.
+        occ_mask = metas.get('occ_mask')
+        occ_cam_mask = metas.get('occ_cam_mask')
+        occ_lidar_mask = metas.get('occ_lidar_mask')
+        occ_nonempty_mask = metas.get('occ_nonempty_mask')
+        occ_loss_mask = metas.get('occ_loss_mask')
         result = {
             'opus_pred_points': pred_points,
             'opus_pred_logits': pred_logits,

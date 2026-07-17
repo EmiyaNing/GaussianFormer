@@ -1,7 +1,8 @@
 import torch
 
 from loss.opus_set_loss import OPUSSetLoss
-from model.encoder.opus_encoder import OfficialOPUSV1Encoder, StrictOPUSV1Encoder
+from model.encoder.opus_encoder import (
+    OfficialOPUSV1Encoder, StrictOPUSV1Encoder, _StrictOPUSSelfAttention)
 from model.head.opus_rasterizer import OPUSRasterizer
 
 
@@ -61,3 +62,13 @@ def test_strict_encoder_uses_all_eight_temporal_frames_and_decoder_logits():
     assert encoder.layers[0].mixing.in_points == 32
     (state['query_points'].sum() + state['opus_logits'].sum()).backward()
     assert all(feature.grad is not None for feature in features)
+
+
+def test_strict_self_attention_eval_accepts_multi_batch_multi_head_mask():
+    attention = _StrictOPUSSelfAttention(
+        embed_dims=8, num_heads=2, dropout=0., pc_range=(0., 0., 0., 2., 2., 2.))
+    attention.eval()
+    with torch.no_grad():
+        output = attention(torch.rand(4, 3, 1, 3), torch.rand(4, 3, 8))
+    assert output.shape == (4, 3, 8)
+    assert torch.isfinite(output).all()
