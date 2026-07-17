@@ -5,7 +5,6 @@ _base_ = ['./opusv1_t_r50_704x256_1f_occ3d.py']
 occ3d_return_keys = [
     'img', 'projection_mat', 'image_wh', 'lidar_points', 'occ_label', 'occ_xyz',
     'occ_cam_mask', 'occ_lidar_mask', 'occ_nonempty_mask', 'occ_loss_mask',
-    'opus_gt_points', 'opus_gt_labels', 'opus_gt_valid', 'opus_gt_camera_valid',
 ]
 
 train_dataset_config = dict(return_keys=occ3d_return_keys)

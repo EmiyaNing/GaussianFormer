@@ -164,7 +164,12 @@ def main(local_rank, args):
             t_in_epochs=False)
     amp = cfg.get('amp', False)
     if amp:
-        scaler = torch.cuda.amp.GradScaler()
+        # Official OPUS-V1 uses a fixed FP16 loss scale of 512.  A very large
+        # growth interval preserves that scale while retaining GradScaler's
+        # overflow handling in this runner.
+        scaler = torch.cuda.amp.GradScaler(
+            init_scale=cfg.get('amp_loss_scale', 65536.0),
+            growth_interval=cfg.get('amp_growth_interval', 2000))
         os.environ['amp'] = 'true'
     else:
         os.environ['amp'] = 'false'

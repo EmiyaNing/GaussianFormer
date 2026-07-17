@@ -26,3 +26,12 @@ def test_rasterizer_discards_out_of_bounds_points():
         pc_range=[0, 0, 0, 1, 1, 1], grid_size=1, grid_shape=[1, 1, 1])
     dense = rasterizer(torch.tensor([[[2.0, 0.0, 0.0]]]), torch.tensor([[[1.0, 0.0]]]))
     assert dense[0, 0].item() == 17
+
+
+def test_rasterizer_discards_padded_points():
+    rasterizer = opus_rasterizer.OPUSRasterizer(
+        pc_range=[0, 0, 0, 1, 1, 1], grid_size=1, grid_shape=[1, 1, 1])
+    dense = rasterizer(
+        torch.tensor([[[0.1, 0.1, 0.1]]]), torch.tensor([[[0.0, 3.0]]]),
+        point_valid_mask=torch.tensor([[False]]))
+    assert dense[0, 0].item() == 17

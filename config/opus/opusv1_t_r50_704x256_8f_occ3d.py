@@ -61,9 +61,12 @@ model = dict(
     img_backbone=dict(
         norm_cfg=dict(type='BN2d', requires_grad=True), norm_eval=True,
         style='pytorch'),
+    encoder=dict(num_frames=num_frames),
 )
 
 amp = True
+amp_loss_scale = 512.0
+amp_growth_interval = 2147483647
 min_lr_ratio = 1e-3
 max_epochs = 100
 load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'

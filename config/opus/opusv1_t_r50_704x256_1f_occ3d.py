@@ -21,7 +21,6 @@ img_norm_cfg = dict(mean=[123.675, 116.28, 103.53],
 occ3d_return_keys = [
     'img', 'projection_mat', 'image_wh', 'occ_label', 'occ_xyz',
     'occ_cam_mask', 'occ_lidar_mask', 'occ_nonempty_mask', 'occ_loss_mask',
-    'opus_gt_points', 'opus_gt_labels', 'opus_gt_valid', 'opus_gt_camera_valid',
 ]
 
 train_pipeline = [
@@ -29,7 +28,6 @@ train_pipeline = [
     dict(type='LoadOccupancyOcc3D', occ3d_path=occ3d_path, semantic=True,
          pc_range=pc_range, grid_size=grid_size, model_coord='ego',
          train_mask_type='none'),
-    dict(type='PrepareOPUSTarget', max_gt_points=max_gt_points, empty_label=17),
     dict(type='ResizeCropFlipImage'),
     dict(type='PhotoMetricDistortionMultiViewImage'),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
@@ -41,7 +39,6 @@ test_pipeline = [
     dict(type='LoadOccupancyOcc3D', occ3d_path=occ3d_path, semantic=True,
          pc_range=pc_range, grid_size=grid_size, model_coord='ego',
          train_mask_type='none'),
-    dict(type='PrepareOPUSTarget', max_gt_points=max_gt_points, empty_label=17),
     dict(type='ResizeCropFlipImage'),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='DefaultFormatBundle'),
@@ -64,19 +61,21 @@ model = dict(
     type='OPUSSegmentor', img_backbone_out_indices=[0, 1, 2, 3],
     img_backbone=dict(type='ResNet', depth=50, num_stages=4,
         out_indices=(0, 1, 2, 3), frozen_stages=1,
-        norm_cfg=dict(type='BN2d', requires_grad=False), norm_eval=True,
-        style='caffe', with_cp=True),
+        norm_cfg=dict(type='BN2d', requires_grad=True), norm_eval=True,
+        style='pytorch', with_cp=True),
     img_neck=dict(type='FPN', in_channels=[256, 512, 1024, 2048],
-        out_channels=256, start_level=0, num_outs=4,
-        add_extra_convs='on_output', relu_before_extra_convs=True),
-    lifter=dict(type='OPUSQueryLifter', num_queries=600, embed_dims=256),
-    encoder=dict(type='OfficialOPUSV1Encoder', embed_dims=256, num_decoder=6,
-        num_heads=8, feedforward_channels=512, dropout=0.1,
-        num_refines=[1, 4, 16, 32, 64, 128], pc_range=pc_range),
+        out_channels=256, start_level=0, num_outs=4),
+    lifter=dict(type='OPUSQueryLifter', num_queries=600, embed_dims=256,
+        learnable_features=False, reference_mode='direct'),
+    encoder=dict(type='StrictOPUSV1Encoder', embed_dims=256, num_decoder=6,
+        num_frames=1, num_views=6, num_points=4, num_levels=4, num_groups=4,
+        num_heads=8, feedforward_channels=512, dropout=0.1, num_classes=17,
+        num_refines=[1, 4, 16, 32, 64, 128], scales=[0.5], pc_range=pc_range),
     head=dict(type='OPUSHead', embed_dims=256, num_classes=17,
         point_multipliers=[1, 4, 16, 32, 64, 128], pc_range=pc_range,
         grid_size=grid_size, grid_shape=grid_shape, empty_label=17,
-        score_threshold=0.5, center_distance_threshold=3.0, padding=True),
+        score_threshold=0.5, center_distance_threshold=3.0, padding=True,
+        decoder_outputs_logits=True),
 )
 
 loss = dict(type='MultiLoss', loss_cfgs=[
@@ -92,10 +91,11 @@ loss_input_convertion = dict(
 
 optimizer = dict(
     optimizer=dict(type='AdamW', lr=2e-4, weight_decay=0.01),
-    paramwise_cfg=dict(custom_keys={'img_backbone': dict(lr_mult=0.1)}))
-# The sparse set loss and six-stage decoder are numerically sensitive during
-# cold start. Keep the reference baseline in FP32; enable AMP only after a
-# stable checkpoint and a separately tuned GradScaler configuration exist.
+    paramwise_cfg=dict(custom_keys={
+        'img_backbone': dict(lr_mult=0.1), 'sampling_offset': dict(lr_mult=0.1)}))
+# The 1-frame configuration is a memory/debug baseline, not the official
+# 8-frame FP16 recipe.  Keep it in FP32: the MSMV extension's backward is
+# FP32 and global AMP can overflow its first backbone update on this path.
 amp = False
 fail_on_nonfinite_grad = True
 grad_max_norm = 35

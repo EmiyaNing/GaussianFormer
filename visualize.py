@@ -701,11 +701,16 @@ def main(local_rank, args):
                             f'val_{i_iter_val}_gt',
                             True, 0, dataset=args.dataset)
                     if args.vis_opus_points and 'opus_points' in result_dict:
+                        point_mask = result_dict.get('opus_point_valid_mask')
+                        if point_mask is None:
+                            point_mask = slice(None)
+                        else:
+                            point_mask = point_mask[idx].detach().cpu().numpy().astype(bool)
                         np.savez_compressed(
                             os.path.join(save_dir, f'val_{i_iter_val}_opus_points_{idx}.npz'),
-                            points=result_dict['opus_points'][idx].detach().cpu().numpy(),
-                            labels=result_dict['opus_labels'][idx].detach().cpu().numpy(),
-                            scores=result_dict['opus_scores'][idx].detach().cpu().numpy())
+                            points=result_dict['opus_points'][idx].detach().cpu().numpy()[point_mask],
+                            labels=result_dict['opus_labels'][idx].detach().cpu().numpy()[point_mask],
+                            scores=result_dict['opus_scores'][idx].detach().cpu().numpy()[point_mask])
                     if args.vis_gaussian:
                         save_gaussian(
                             save_dir,

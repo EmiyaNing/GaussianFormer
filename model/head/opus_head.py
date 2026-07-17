@@ -12,7 +12,7 @@ class OPUSHead(BaseTaskHead):
                  pc_range=(-40., -40., -1., 40., 40., 5.4), grid_size=0.4,
                  grid_shape=(200, 200, 16), empty_label=17,
                  score_threshold=0.5, center_distance_threshold=3.0,
-                 padding=True, init_cfg=None):
+                 padding=True, decoder_outputs_logits=False, init_cfg=None):
         super().__init__(init_cfg)
         self.embed_dims = embed_dims
         self.num_classes = num_classes
@@ -20,13 +20,20 @@ class OPUSHead(BaseTaskHead):
         self.pc_range = tuple(pc_range)
         self.score_threshold = score_threshold
         self.center_distance_threshold = center_distance_threshold
-        self.offset_heads = nn.ModuleList([
-            nn.Linear(embed_dims, multiplier * 3) for multiplier in self.point_multipliers
-        ])
-        self.class_heads = nn.ModuleList([
-            nn.Linear(embed_dims, multiplier * num_classes)
-            for multiplier in self.point_multipliers
-        ])
+        self.decoder_outputs_logits = decoder_outputs_logits
+        if decoder_outputs_logits:
+            # Official V1 owns both cls/reg branches inside decoder layers.
+            # Do not register unused duplicate heads in the strict path.
+            self.offset_heads = nn.ModuleList()
+            self.class_heads = nn.ModuleList()
+        else:
+            self.offset_heads = nn.ModuleList([
+                nn.Linear(embed_dims, multiplier * 3) for multiplier in self.point_multipliers
+            ])
+            self.class_heads = nn.ModuleList([
+                nn.Linear(embed_dims, multiplier * num_classes)
+                for multiplier in self.point_multipliers
+            ])
         self.rasterizer = OPUSRasterizer(
             pc_range, grid_size, grid_shape, empty_label, score_threshold,
             center_distance_threshold, padding)
@@ -46,8 +53,7 @@ class OPUSHead(BaseTaskHead):
         if len(representation) != len(self.point_multipliers):
             raise ValueError('point_multipliers must contain one entry per decoder layer')
         pred_points, pred_logits, pred_valid_masks = [], [], []
-        for stage, (state, offset_head, class_head, multiplier) in enumerate(zip(
-                representation, self.offset_heads, self.class_heads, self.point_multipliers)):
+        for stage, (state, multiplier) in enumerate(zip(representation, self.point_multipliers)):
             features, base_points = state['query_features'], state['query_points']
             batch_size, queries, _ = features.shape
             if base_points.ndim == 4:
@@ -55,9 +61,16 @@ class OPUSHead(BaseTaskHead):
                     raise ValueError('OPUS coarse-to-fine point count does not match point_multipliers')
                 points = base_points
             else:
+                offset_head = self.offset_heads[stage]
                 offsets = torch.tanh(offset_head(features).view(batch_size, queries, multiplier, 3))
                 points = (base_points.unsqueeze(2) + offsets * 0.08).clamp(0.0, 1.0)
-            logits = class_head(features).view(batch_size, queries, multiplier, self.num_classes)
+            if self.decoder_outputs_logits:
+                logits = state['opus_logits']
+                if logits.shape != (batch_size, queries, multiplier, self.num_classes):
+                    raise ValueError('strict OPUS decoder logits have an unexpected shape')
+            else:
+                class_head = self.class_heads[stage]
+                logits = class_head(features).view(batch_size, queries, multiplier, self.num_classes)
             pred_points.append(self._to_world(points.flatten(1, 2)))
             pred_logits.append(logits.flatten(1, 2))
             query_valid_mask = state.get('query_valid_mask')
