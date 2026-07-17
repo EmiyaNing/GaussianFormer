@@ -43,7 +43,10 @@ def select_occ3d_eval_mask(result_dict, idx, cfg):
     else:
         raise NotImplementedError(f'Unsupported Occ3D eval mask: {mask_name}')
 
-    if mask is not None and mask.dim() >= 4:
+    # Heads may retain dense [B, X, Y, Z] masks while older heads return
+    # flattened [B, V] masks.  In both cases dimension zero is the batch
+    # dimension and must be selected before passing one prediction to IoU.
+    if mask is not None and mask.dim() >= 2:
         mask = mask[idx]
     return mask.flatten() if mask is not None else None
 
