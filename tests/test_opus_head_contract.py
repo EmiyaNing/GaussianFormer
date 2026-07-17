@@ -26,7 +26,7 @@ def _run_head(batch_size):
     assert output['sampled_xyz'].shape == (batch_size, 8, 3)
     for key in ('occ_mask', 'occ_cam_mask', 'occ_lidar_mask',
                 'occ_nonempty_mask', 'occ_loss_mask'):
-        assert output[key].shape == (batch_size, 8)
+        assert output[key].shape == (batch_size, 2, 2, 2)
 
 
 def test_opus_head_metric_contract_for_full_batch():

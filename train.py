@@ -28,27 +28,37 @@ def get_occ3d_eval_mask_name(cfg):
     return 'camera' if cfg.get('eval_mask_flag', True) else 'none'
 
 
-def select_occ3d_eval_mask(result_dict, idx, cfg):
+def select_occ3d_eval_mask(metas, idx, cfg, expected_numel=None):
     mask_name = get_occ3d_eval_mask_name(cfg)
     if mask_name == 'none':
         return None
     if mask_name == 'camera':
-        mask = result_dict.get('occ_cam_mask', None)
+        mask = metas.get('occ_cam_mask', None)
     elif mask_name == 'lidar':
-        mask = result_dict.get('occ_lidar_mask', None)
+        mask = metas.get('occ_lidar_mask', None)
     elif mask_name == 'nonempty':
-        mask = result_dict.get('occ_nonempty_mask', None)
+        mask = metas.get('occ_nonempty_mask', None)
         if mask is None:
-            mask = result_dict.get('occ_mask', None)
+            mask = metas.get('occ_mask', None)
     else:
         raise NotImplementedError(f'Unsupported Occ3D eval mask: {mask_name}')
 
-    # Heads may retain dense [B, X, Y, Z] masks while older heads return
-    # flattened [B, V] masks.  In both cases dimension zero is the batch
-    # dimension and must be selected before passing one prediction to IoU.
-    if mask is not None and mask.dim() >= 2:
+    if mask is None:
+        return None
+    # ``metas`` is the local-rank batch, never a globally gathered batch.
+    # Select its leading batch dimension for both dense [B,X,Y,Z] and flat
+    # [B,V] masks.  A rank can have a smaller tail batch, so validate idx.
+    if mask.dim() >= 2:
+        if idx >= mask.shape[0]:
+            raise IndexError(f'Occ3D mask batch index {idx} is outside local shape {tuple(mask.shape)}')
         mask = mask[idx]
-    return mask.flatten() if mask is not None else None
+    mask = mask.reshape(-1).bool()
+    if expected_numel is not None and mask.numel() != expected_numel:
+        raise ValueError(
+            'Occ3D evaluation mask/prediction size mismatch on one local rank: '
+            f'mask={mask.numel()}, prediction={expected_numel}. '
+            'Check that occ masks retain [B, X, Y, Z] or [B, V] layout.')
+    return mask
 
 
 def find_nonfinite_gradients(model):
@@ -409,7 +419,11 @@ def main(local_rank, args):
                         if cfg.dataset_name_flag == 'surroundocc':
                             occ_mask = result_dict['occ_cam_mask'][idx].flatten()
                         elif cfg.dataset_name_flag == 'occ3d':
-                            occ_mask = select_occ3d_eval_mask(result_dict, idx, cfg)
+                            # Use the local dataloader batch as the source of
+                            # truth.  Head outputs may be flattened adapters;
+                            # the raw batch preserves its per-rank B dimension.
+                            occ_mask = select_occ3d_eval_mask(
+                                data, idx, cfg, expected_numel=pred_occ.numel())
                         miou_metric._after_step(pred_occ, gt_occ, occ_mask)
                 
                 val_loss_list.append(loss.detach().cpu().numpy())

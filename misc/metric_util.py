@@ -52,8 +52,14 @@ class MeanIoU:
         else:
             if mask is not None:
                 # the occ3d's camera mask
-                if mask.shape[0] != outputs.shape[0]:
-                    mask = mask[0].reshape(-1)
+                outputs = outputs.reshape(-1)
+                targets = targets.reshape(-1)
+                mask = mask.reshape(-1).bool()
+                if mask.numel() != outputs.numel() or targets.numel() != outputs.numel():
+                    raise ValueError(
+                        'Occ3D metric received mismatched flattened tensors: '
+                        f'prediction={outputs.numel()}, target={targets.numel()}, '
+                        f'mask={mask.numel()}')
                 outputs = outputs[mask]
                 targets = targets[mask]
 
