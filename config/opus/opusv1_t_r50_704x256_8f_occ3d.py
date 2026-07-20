@@ -10,7 +10,7 @@ official 33.2 mIoU report.
 _base_ = ['./opusv1_t_r50_704x256_1f_occ3d.py']
 
 num_frames = 8
-batch_size = 8
+batch_size = 2
 input_shape = (704, 256)
 pc_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
 grid_size = 0.4
@@ -66,7 +66,11 @@ model = dict(
 
 amp = True
 amp_loss_scale = 512.0
-amp_growth_interval = 2147483647
+# The first 8-frame step can overflow at the official initial scale.  Let
+# GradScaler skip that step and back off instead of aborting before its normal
+# overflow handling runs; FP32 1f debugging keeps strict finite-grad checks.
+amp_growth_interval = 2000
+fail_on_nonfinite_grad = False
 min_lr_ratio = 1e-3
 max_epochs = 100
-load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'
+load_from = 'ckpts/raydn_r50_flash_704_bs2_seq_428q_nui_60e.pth'
