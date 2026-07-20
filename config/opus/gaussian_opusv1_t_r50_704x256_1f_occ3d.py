@@ -21,7 +21,7 @@ model = dict(
         embed_dims=256, semantic_dim=semantic_dim, pc_range=pc_range,
         scale_range=[[0.15, 0.15, 0.15], [8.0, 8.0, 4.0]],
         initial_scale=[1.6, 1.6, 1.0], initial_opacity=0.1,
-        query_grad=True, feature_grad=True),
+        query_grad=True, feature_grad=True, template_attribute_grad=False),
     encoder=dict(
         _delete_=True,
         type='GaussianOPUSEncoder', 
@@ -62,10 +62,11 @@ model = dict(
             grid_size=grid_size)),
 )
 
-# Intermediate semantic/rotation/opacity heads are not consumed by the
-# Phase-A cross-stage recurrence. Keep DDP robust while those branches remain
-# intentionally unsupervised. This is consumed by train.py, not model builder.
-find_unused_parameters = True
+# Phase-A has no permanently unused trainable branch: intermediate stages
+# predict geometry only and template auxiliary attributes are constants.
+# Keep this False because ResNet's reentrant activation checkpoint conflicts
+# with DDP's find_unused_parameters=True on the target PyTorch version.
+find_unused_parameters = False
 
 loss = dict(type='MultiLoss', loss_cfgs=[
     # Preserve the GaussianFormer occupancy objective and its CE/Lovasz

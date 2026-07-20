@@ -30,9 +30,11 @@ def _next_stage_parent(gaussian, cross_stage_geometry_grad=True):
 class _SemanticGaussianRefinementHead(BaseModule):
     def __init__(self, embed_dims, num_refine, semantic_dim, stage_step,
                  pc_range, scale_min=(.15, .15, .15), scale_max=(.99, .99, .99),
-                 position_radius_multiplier=1.1):
+                 position_radius_multiplier=1.1, predict_semantics=True):
         super().__init__()
         self.num_refine = num_refine
+        self.semantic_dim = semantic_dim
+        self.predict_semantics = predict_semantics
         self.stage_step = stage_step
         self.position_radius_multiplier = position_radius_multiplier
         self.register_buffer('scale_min', torch.tensor(scale_min, dtype=torch.float32))
@@ -43,21 +45,29 @@ class _SemanticGaussianRefinementHead(BaseModule):
             nn.Linear(embed_dims, embed_dims), nn.ReLU(inplace=True),
             nn.Linear(embed_dims, embed_dims), nn.ReLU(inplace=True),
             nn.Linear(embed_dims, num_refine * 11))
-        self.semantic = nn.Sequential(
-            nn.Linear(embed_dims, embed_dims), nn.ReLU(inplace=True),
-            nn.Linear(embed_dims, embed_dims), nn.ReLU(inplace=True),
-            nn.Linear(embed_dims, num_refine * semantic_dim))
+        self.semantic = None
+        if predict_semantics:
+            self.semantic = nn.Sequential(
+                nn.Linear(embed_dims, embed_dims), nn.ReLU(inplace=True),
+                nn.Linear(embed_dims, embed_dims), nn.ReLU(inplace=True),
+                nn.Linear(embed_dims, num_refine * semantic_dim))
         nn.init.zeros_(self.geometry[-1].weight)
         nn.init.zeros_(self.geometry[-1].bias)
         with torch.no_grad():
             self.geometry[-1].bias.view(num_refine, 11)[:, 6] = 1.
             self.geometry[-1].bias.view(num_refine, 11)[:, 10] = torch.logit(torch.tensor(.1))
-            nn.init.constant_(self.semantic[-1].bias, -4.59511985013459)
+            if self.semantic is not None:
+                nn.init.constant_(self.semantic[-1].bias, -4.59511985013459)
 
     def forward(self, features, parent, query_valid_mask):
         batch, queries, _ = features.shape
         geometry = self.geometry(features).view(batch, queries, self.num_refine, 11)
-        semantics = self.semantic(features).view(batch, queries, self.num_refine, -1)
+        if self.semantic is None:
+            # Only the final stage is rendered in Phase-A. Earlier semantic
+            # logits would have no loss and must not be trainable DDP params.
+            semantics = features.new_zeros(batch, queries, self.num_refine, self.semantic_dim)
+        else:
+            semantics = self.semantic(features).view(batch, queries, self.num_refine, -1)
         mean = parent.means.mean(dim=2, keepdim=True)
         scale = parent.scales.mean(dim=2, keepdim=True).clamp_min(1e-4)
         # Stage 0 places children inside (or at most 10% outside) the large
@@ -85,7 +95,7 @@ class _GaussianOPUSDecoderLayer(BaseModule):
     def __init__(self, embed_dims, num_frames, num_views, num_points, num_levels,
                  num_groups, num_heads, feedforward_channels, dropout, last_refine,
                  num_refine, semantic_dim, stage_step, pc_range, child_scale_range,
-                 position_radius_multiplier):
+                 position_radius_multiplier, predict_semantics):
         super().__init__()
         self.pc_range = tuple(pc_range)
         self.position_encoder = nn.Sequential(
@@ -104,7 +114,8 @@ class _GaussianOPUSDecoderLayer(BaseModule):
         self.refine = _SemanticGaussianRefinementHead(
             embed_dims, num_refine, semantic_dim, stage_step, pc_range,
             scale_min=child_scale_range[0], scale_max=child_scale_range[1],
-            position_radius_multiplier=position_radius_multiplier)
+            position_radius_multiplier=position_radius_multiplier,
+            predict_semantics=predict_semantics)
 
     def forward(self, parent, query_features, mlvl_feats, metas, query_valid_mask):
         parent_points = _opus_encode_points(parent.means, self.pc_range)
@@ -142,8 +153,10 @@ class GaussianOPUSEncoder(BaseModule):
             _GaussianOPUSDecoderLayer(embed_dims, num_frames, num_views, num_points, num_levels,
                                       num_groups, num_heads, feedforward_channels, dropout, last, current,
                                       semantic_dim, step, pc_range, child_scale_range,
-                                      position_radius_multiplier)
-            for last, current, step in zip(previous, num_refines, stage_steps)
+                                      position_radius_multiplier,
+                                      predict_semantics=(stage_index == num_decoder - 1))
+            for stage_index, (last, current, step) in enumerate(
+                zip(previous, num_refines, stage_steps))
         ])
 
     @staticmethod

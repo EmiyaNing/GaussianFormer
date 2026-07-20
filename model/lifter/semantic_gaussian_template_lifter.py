@@ -21,7 +21,8 @@ class SemanticGaussianTemplateLifter(BaseLifter):
                  pc_range=(-40., -40., -1., 40., 40., 5.4),
                  scale_range=((0.15, 0.15, 0.15), (8., 8., 4.)),
                  initial_scale=(1.6, 1.6, 1.0), initial_opacity=0.1,
-                 query_grad=True, feature_grad=True, init_cfg=None):
+                 query_grad=True, feature_grad=True,
+                 template_attribute_grad=False, init_cfg=None):
         super().__init__(init_cfg)
         self.num_templates = num_templates
         self.embed_dims = embed_dims
@@ -38,12 +39,16 @@ class SemanticGaussianTemplateLifter(BaseLifter):
             safe_inverse_sigmoid(scale_prob.clamp(1e-4, 1 - 1e-4)), requires_grad=query_grad)
         rotation = torch.zeros(num_templates, 4)
         rotation[:, 0] = 1.
-        self.rotation = nn.Parameter(rotation, requires_grad=query_grad)
+        # Phase-A consumes a template only through its mean and scale.  Keep
+        # the remaining attributes as constants unless a later phase explicitly
+        # reads them; otherwise DDP sees permanently unused parameters.
+        attribute_grad = query_grad and template_attribute_grad
+        self.rotation = nn.Parameter(rotation, requires_grad=attribute_grad)
         self.opacity_logits = nn.Parameter(
             safe_inverse_sigmoid(torch.full((num_templates, 1), initial_opacity)),
-            requires_grad=query_grad)
+            requires_grad=attribute_grad)
         self.semantic_logits = nn.Parameter(torch.zeros(num_templates, semantic_dim),
-                                            requires_grad=query_grad)
+                                            requires_grad=attribute_grad)
         self.query_features = nn.Parameter(torch.empty(num_templates, embed_dims),
                                            requires_grad=feature_grad)
         self.init_weights()
