@@ -3,7 +3,7 @@ _base_ = ['./opusv1_t_r50_704x256_1f_occ3d.py']
 
 semantic_dim = 17
 num_templates = 600
-num_refines = [1, 4, 8, 32, 16, 32]
+num_refines = [1, 4, 8, 16, 32]
 # MMEngine resolves a child config in its own Python scope; base-config
 # variables are merged afterwards and are therefore not names usable here.
 pc_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
@@ -11,22 +11,29 @@ grid_size = 0.4
 # GaussianOPUSHead supports B>1 by sequentially invoking the single-scene
 # localagg kernel.  Keep B=1 by default because renderer memory still scales
 # approximately linearly with B; users may set this to 2 after profiling.
-batch_size = 2
+batch_size = 4
 train_loader = dict(batch_size=batch_size, num_workers=4, shuffle=True)
 val_loader = dict(batch_size=batch_size, num_workers=4)
 
 model = dict(
     lifter=dict(
-        _delete_=True, type='SemanticGaussianTemplateLifter', num_templates=num_templates,
-        embed_dims=256, semantic_dim=semantic_dim, pc_range=pc_range,
-        scale_range=[[0.15, 0.15, 0.15], [8.0, 8.0, 4.0]],
-        initial_scale=[1.6, 1.6, 1.0], initial_opacity=0.1,
-        query_grad=True, feature_grad=True, template_attribute_grad=False),
+        _delete_=True, 
+        type='SemanticGaussianTemplateLifter', 
+        num_templates=num_templates,
+        embed_dims=256, 
+        semantic_dim=semantic_dim, 
+        pc_range=pc_range,
+        scale_range=[[0.08, 0.08, 0.08], [0.8, 0.8, 0.8]],
+        initial_scale=[1.6, 1.6, 1.0], 
+        initial_opacity=0.1,
+        query_grad=True, 
+        feature_grad=True, 
+        template_attribute_grad=True),
     encoder=dict(
         _delete_=True,
         type='GaussianOPUSEncoder', 
         embed_dims=256, 
-        num_decoder=6,
+        num_decoder=5,
         num_frames=1, 
         num_views=6, 
         num_points=4, 
@@ -37,11 +44,11 @@ model = dict(
         dropout=0.1,
         semantic_dim=semantic_dim, 
         num_refines=num_refines,
-        stage_steps=[1.0, 0.85, 0.7, 0.55, 0.4, 0.3],
+        stage_steps=[4.0, 3.6, 3.2, 2.8, 2.4],
         # Per-axis decoded Gaussian scale bounds in metres. The encoder
         # requires every upper-bound component to remain strictly below 1m.
-        child_scale_range=[[0.15, 0.15, 0.15], [0.99, 0.99, 0.99]],
-        position_radius_multiplier=1.1,
+        child_scale_range=[[0.08, 0.08, 0.08], [0.8, 0.8, 0.8]],
+        position_radius_multiplier=1.0,
         # Preserve the means/scales graph between decoder stages: later
         # occupancy/CD losses directly refine earlier Gaussian geometry.
         cross_stage_geometry_grad=True,
@@ -51,7 +58,7 @@ model = dict(
         type='GaussianOPUSHead', 
         # Render only the final stage during Phase-A training to constrain
         # localagg activation memory.  GaussianHead expects an underscore.
-        apply_loss_type='random_1',
+        apply_loss_type='fixed_0_2_4',
         # Defensive renderer limit. Keep it no smaller than child_scale_range.
         max_render_scale=1.2,
         num_classes=18,
@@ -89,7 +96,7 @@ loss = dict(type='MultiLoss', loss_cfgs=[
              0.85486129, 0.8527829, 0.5]),
     # OPUS-style symmetric KNN assignment + Smooth-L1 centre Chamfer term.
     dict(type='GaussianCenterChamferLoss',
-         stage_weights=[0.2, 0.3, 0.42, 0.56, 0.72, 1.0],
+         stage_weights=[0.3, 0.42, 0.56, 0.72, 1.0],
          lambda_center=0.5, smooth_l1_beta=0.2, empty_label=17,
          chunk_size=1024, use_occ_loss_mask=False),
 ])

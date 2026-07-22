@@ -71,7 +71,7 @@ class _SemanticGaussianRefinementHead(BaseModule):
         mean = parent.means.mean(dim=2, keepdim=True)
         scale = parent.scales.mean(dim=2, keepdim=True).clamp_min(1e-4)
         # Stage 0 places children inside (or at most 10% outside) the large
-        # template ellipsoid.  Later stages use already-small parent scales,
+        # template ellipsoid. Later stages use already-small parent scales,
         # so their refinements remain local as well.
         means = mean + (self.stage_step * self.position_radius_multiplier * scale *
                         torch.tanh(geometry[..., :3]))

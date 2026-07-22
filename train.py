@@ -68,6 +68,15 @@ def find_nonfinite_gradients(model):
     ]
 
 
+def loss_value_to_float(value):
+    """Convert a loss component/metric to a detached Python float for logging."""
+    if isinstance(value, torch.Tensor):
+        value = value.detach().float().mean().cpu().item()
+    elif hasattr(value, 'item'):
+        value = value.item()
+    return float(value)
+
+
 def main(local_rank, args):
     # global settings
     set_random_seed(args.seed)
@@ -261,6 +270,7 @@ def main(local_rank, args):
         if hasattr(train_dataset_loader.sampler, 'set_epoch'):
             train_dataset_loader.sampler.set_epoch(epoch)
         loss_list = []
+        loss_component_history = {}
         time.sleep(10)
         data_time_s = time.time()
         time_s = time.time()
@@ -323,6 +333,17 @@ def main(local_rank, args):
                     optimizer.zero_grad()
 
             loss_list.append(loss.detach().cpu().item())
+            # Keep a per-component history over the same logging window as
+            # ``loss_list``.  MultiLoss already returns detached scalar values,
+            # but the conversion also handles tensor/NumPy metrics from custom
+            # loss implementations.
+            for loss_name, loss_value in loss_dict.items():
+                try:
+                    scalar_value = loss_value_to_float(loss_value)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(scalar_value):
+                    loss_component_history.setdefault(loss_name, []).append(scalar_value)
             scheduler.step_update(global_iter)
             time_e = time.time()
 
@@ -336,10 +357,16 @@ def main(local_rank, args):
                     time_e - time_s, data_time_e - data_time_s))
                 detailed_loss = []
                 for loss_name, loss_value in loss_dict.items():
-                    detailed_loss.append(f'{loss_name}: {loss_value:.5f}')
+                    current_value = loss_value_to_float(loss_value)
+                    history = loss_component_history.get(loss_name, [])
+                    history_mean = np.mean(history) if history else float('nan')
+                    detailed_loss.append(
+                        f'{loss_name}: current={current_value:.5f}, '
+                        f'history_avg={history_mean:.5f}')
                 detailed_loss = ', '.join(detailed_loss)
-                logger.info(detailed_loss)
+                logger.info('[TRAIN][LossComponents] ' + detailed_loss)
                 loss_list = []
+                loss_component_history = {}
             data_time_s = time.time()
             time_s = time.time()
 
