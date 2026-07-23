@@ -28,7 +28,10 @@ model = dict(
         initial_opacity=0.1,
         query_grad=True, 
         feature_grad=True, 
-        template_attribute_grad=True),
+        # Phase-A only consumes template means and scales.  Rotation, opacity,
+        # and semantics are predicted by the decoder, so keeping these template
+        # attributes frozen avoids permanently unused DDP parameters.
+        template_attribute_grad=False),
     encoder=dict(
         _delete_=True,
         type='GaussianOPUSEncoder', 
@@ -76,7 +79,7 @@ model = dict(
 )
 
 # Phase-A has no permanently unused trainable branch: intermediate stages
-# predict geometry only and template auxiliary attributes are constants.
+# predict geometry only and template auxiliary attributes are frozen.
 # Keep this False because ResNet's reentrant activation checkpoint conflicts
 # with DDP's find_unused_parameters=True on the target PyTorch version.
 find_unused_parameters = False
