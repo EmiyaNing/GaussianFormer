@@ -102,9 +102,12 @@ class MeanIoU:
         for iou, prec, reca, label_str in zip(ious, precs, recas, self.label_str):
             logger.info('%s : %.2f%%, %.2f, %.2f' % (label_str, iou * 100, prec, reca))
         
-        logger.info(self.total_seen.int())
-        logger.info(self.total_correct.int())
-        logger.info(self.total_positive.int())
+        # Validation can accumulate more than int32's maximum number of
+        # voxels.  Use int64 for diagnostics so counts do not appear clamped
+        # to 2147483647; metric accumulation itself remains floating point.
+        logger.info(self.total_seen.long())
+        logger.info(self.total_correct.long())
+        logger.info(self.total_positive.long())
 
         occ_iou = self.total_correct[-1] / (self.total_seen[-1]
                                             + self.total_positive[-1]

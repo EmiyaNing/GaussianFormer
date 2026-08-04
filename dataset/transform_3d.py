@@ -885,6 +885,88 @@ class LoadOccupancyKITTI360(object):
 
 
 @OPENOCC_TRANSFORMS.register_module()
+class EntropyBasedHistoryPointLoader(object):
+    """只基于历史 LiDAR 选择和融合点云，不读取任何历史图像。"""
+
+    def __init__(self, max_window, min_window, entropy_gain_ratio_threshold,
+                 data_root, pc_range, voxel_size=(0.5, 0.5, 0.5),
+                 max_points_per_voxel=20, max_voxels=1600000,
+                 deci_batch_size=65536, deci_topk=64,
+                 point_cache_size=64, log_selection=False):
+        self.max_window = max_window
+        self.min_window = min_window
+        self.entropy_gain_ratio_threshold = entropy_gain_ratio_threshold
+        self.log_selection = log_selection
+        from dataset.entropy_history_loader import EntropyBasedHistoryLoader
+
+        self.engine = EntropyBasedHistoryLoader(
+            max_window=max_window,
+            min_window=min_window,
+            entropy_gain_ratio_threshold=entropy_gain_ratio_threshold,
+            data_root=data_root,
+            pc_range=pc_range,
+            voxel_size=voxel_size,
+            max_points_per_voxel=max_points_per_voxel,
+            max_voxels=max_voxels,
+            deci_batch_size=deci_batch_size,
+            deci_topk=deci_topk,
+            point_cache_size=point_cache_size,
+            include_history_images=False,
+        )
+
+    def __call__(self, results):
+        ctx = results.get('history_context')
+        if ctx is None:
+            results['num_lidar_history_frame'] = 0
+            return results
+
+        selection = self.engine.forward(
+            ctx['scene_infos'], ctx['scene_token'], ctx['frame_index']
+        )
+        selected_frames = selection['selected_frames']
+        results['lidar_points'] = selection['fused_points']
+        results['num_lidar_history_frame'] = len(selected_frames)
+        results['selected_history_frames'] = [
+            frame['frame_index'] for frame in selected_frames
+        ]
+        results['entropy_candidate_gains'] = selection['candidate_gains']
+        results['entropy_accepted_gains'] = selection['accepted_gains']
+        results['entropy_values'] = selection['entropy_values']
+        results['entropy_total_gain'] = selection['total_gain']
+        results['entropy_remaining_gain_ratios'] = (
+            selection['remaining_gain_ratios']
+        )
+        results['entropy_stop_reason'] = selection['stop_reason']
+        results['entropy_gain_ratio_threshold'] = (
+            self.entropy_gain_ratio_threshold
+        )
+        if self.log_selection:
+            print(
+                '[EntropySelector] '
+                f"scene={ctx['scene_token']} "
+                f"frame={ctx['frame_index']} "
+                f'selected_history={len(selected_frames)} '
+                f"remaining_ratio={selection['remaining_gain_ratios'][-1]:.4f} "
+                f"stop_reason={selection['stop_reason']}"
+                if selection['remaining_gain_ratios'] else
+                '[EntropySelector] '
+                f"scene={ctx['scene_token']} "
+                f"frame={ctx['frame_index']} selected_history=0 "
+                f"stop_reason={selection['stop_reason']}"
+            )
+        return results
+
+    def __repr__(self):
+        return (
+            f'{self.__class__.__name__}(max_window={self.max_window}, '
+            f'min_window={self.min_window}, '
+            f'entropy_gain_ratio_threshold='
+            f'{self.entropy_gain_ratio_threshold}, '
+            f'log_selection={self.log_selection})'
+        )
+
+
+@OPENOCC_TRANSFORMS.register_module()
 class EntropyBasedHistoryFrameLoader(object):
     """基于熵增益的自适应历史帧加载器。
 
@@ -906,7 +988,10 @@ class EntropyBasedHistoryFrameLoader(object):
     """
 
     def __init__(self, max_window, min_window, entropy_gain_threshold,
-                 data_root, pc_range, num_cams=6, to_float32=True):
+                 data_root, pc_range, num_cams=6, to_float32=True,
+                 voxel_size=(0.5, 0.5, 0.5), max_points_per_voxel=20,
+                 max_voxels=1600000, deci_batch_size=65536,
+                 deci_topk=64, point_cache_size=64):
         self.max_window = max_window
         self.min_window = min_window
         self.entropy_gain_threshold = entropy_gain_threshold
@@ -914,14 +999,26 @@ class EntropyBasedHistoryFrameLoader(object):
         self.pc_range = pc_range
         self.num_cams = num_cams
         self.to_float32 = to_float32
+        self.voxel_size = voxel_size
+        self.max_points_per_voxel = max_points_per_voxel
+        self.max_voxels = max_voxels
+        self.deci_batch_size = deci_batch_size
+        self.deci_topk = deci_topk
+        self.point_cache_size = point_cache_size
         from dataset.entropy_history_loader import EntropyBasedHistoryLoader
 
         self.engine = EntropyBasedHistoryLoader(
             max_window=self.max_window,
             min_window=self.min_window,
-            entropy_gain_threshold=self.entropy_gain_threshold,
+            entropy_gain_ratio_threshold=self.entropy_gain_threshold,
             data_root=self.data_root,
             pc_range=self.pc_range,
+            voxel_size=self.voxel_size,
+            max_points_per_voxel=self.max_points_per_voxel,
+            max_voxels=self.max_voxels,
+            deci_batch_size=self.deci_batch_size,
+            deci_topk=self.deci_topk,
+            point_cache_size=self.point_cache_size,
         )
 
     def __call__(self, results):
@@ -946,9 +1043,10 @@ class EntropyBasedHistoryFrameLoader(object):
 
         # ---- Step 3: 调用熵增益核心引擎 ----
         
-        selected_frames, gain_values = self.engine.forward(
+        selection = self.engine.forward(
             scene_infos, scene_token, frame_index
         )
+        selected_frames = selection['selected_frames']
 
         # ---- Step 4: 加载选中历史帧图像（与 LoadMultiViewImageHistory 一致） ----
         sensor_types = [
@@ -969,31 +1067,23 @@ class EntropyBasedHistoryFrameLoader(object):
                 results['ego2img'].append(frame['ego2img'][cam_type])
             num_history_frame += 1
 
-        # ---- Step 5: 替换 lidar_points 为熵筛选后的融合点云 ----
-        current_only = self._load_lidar_points(results['pts_filename'])
-        if num_history_frame > 0:
-            fused = [current_only]
-            for frame in selected_frames:
-                fused.append(frame['points'])
-            results['lidar_points'] = np.concatenate(fused, axis=0)
-        else:
-            results['lidar_points'] = current_only
+        # ---- Step 5: 使用选择引擎已经变换、过滤并融合好的点云 ----
+        results['lidar_points'] = selection['fused_points']
 
         # ---- Step 6: 记录元信息（与 LoadMultiViewImageHistory 一致的键） ----
         results['num_current_img'] = self.num_cams
         results['num_history_frame'] = num_history_frame
         results['img_shape'] = [x.shape[:2] for x in results['img']]
+        results['selected_history_frames'] = [
+            frame['frame_index'] for frame in selected_frames
+        ]
+        results['entropy_candidate_gains'] = selection['candidate_gains']
+        results['entropy_accepted_gains'] = selection['accepted_gains']
+        results['entropy_values'] = selection['entropy_values']
+        results['entropy_stop_reason'] = selection['stop_reason']
+        results['entropy_threshold'] = self.entropy_gain_threshold
 
         return results
-
-    def _load_lidar_points(self, lidar_filename):
-        """加载单帧LiDAR点云，返回 (N, 4) — x, y, z, intensity"""
-        lidar_path = (
-            lidar_filename if os.path.isabs(lidar_filename)
-            else os.path.join(self.data_root, lidar_filename)
-        )
-        points = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)
-        return points[:, :4]
 
     def __repr__(self):
         repr_str = self.__class__.__name__

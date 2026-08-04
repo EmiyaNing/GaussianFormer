@@ -1,3 +1,24 @@
+"""
+ensemble_eval.py — Multi-Stage Gaussian Ensemble Evaluation Script.
+
+Based on eval.py, this script renders occupancy from **every** decoder stage's
+gaussian predictions and fuses them via equal-weight logit averaging before
+computing the standard mIoU / Occ3D metrics.
+
+Usage (identical to eval.py)::
+
+    python ensemble_eval.py --py-config config/nuscenes_gs25600_voxel.py \\
+                            --work-dir ./out/ensemble_eval \\
+                            [--resume-from ./out/.../latest.pth]
+
+Key differences from eval.py:
+    1. Instead of using ``result_dict['final_occ']`` (last stage only),
+       all stages listed in ``result_dict['gaussians']`` are independently
+       rendered through ``render_all_stage_occupancies()``.
+    2. The per-stage logits are averaged by ``fuse_stage_occupancies()``
+       to produce the final prediction.
+"""
+
 # try:
 #     from vis import save_occ
 # except:
@@ -14,6 +35,12 @@ from mmseg.models import build_segmentor
 
 import warnings
 warnings.filterwarnings("ignore")
+
+# --- ensemble-specific imports ---
+from model.head.ensemble_ops import (
+    render_all_stage_occupancies,
+    fuse_stage_occupancies,
+)
 
 
 def pass_print(*args, **kwargs):
@@ -35,7 +62,12 @@ def occ3d_mask_to_numpy(result_dict, key, idx):
         mask = mask[idx]
     return mask.cpu().numpy()
 
+
 def main(local_rank, args):
+    # =====================================================================
+    #  Phase 1:  Environment & Config  (identical to eval.py)
+    # =====================================================================
+
     # global settings
     set_random_seed(args.seed)
     torch.backends.cudnn.deterministic = False
@@ -75,6 +107,11 @@ def main(local_rank, args):
     logger = MMLogger('selfocc', log_file=log_file)
     MMLogger._instance_dict['selfocc'] = logger
     logger.info(f'Config:\n{cfg.pretty_text}')
+    logger.info('[ENSEMBLE EVAL] Multi-stage gaussian ensemble mode enabled.')
+
+    # =====================================================================
+    #  Phase 2:  Build Model & Load Weights  (identical to eval.py)
+    # =====================================================================
 
     # build model
     import model
@@ -139,6 +176,11 @@ def main(local_rank, args):
                 refine_load_from_sd(state_dict), strict=False))
         
     print_freq = cfg.print_freq
+
+    # =====================================================================
+    #  Phase 3:  Metrics Setup  (identical to eval.py)
+    # =====================================================================
+
     if cfg.dataset_name_flag == 'surroundocc':
         from misc.metric_util import MeanIoU
         miou_metric = MeanIoU(
@@ -161,6 +203,9 @@ def main(local_rank, args):
         print("Not emplement this dataset:", cfg.dataset_name_flag)
         exit(0)
     
+    # =====================================================================
+    #  Phase 4:  Ensemble Evaluation Loop  (★ core difference from eval.py)
+    # =====================================================================
 
     my_model.eval()
     os.environ['eval'] = 'true'
@@ -169,16 +214,34 @@ def main(local_rank, args):
         for i_iter_val, data in enumerate(val_dataset_loader):
             
             for k in list(data.keys()):
-                if (isinstance(data[k], torch.Tensor) and not (
-                        k == 'lidar_points' and
-                        cfg.get('keep_lidar_points_cpu', False))):
+                if isinstance(data[k], torch.Tensor):
                     data[k] = data[k].cuda()
             input_imgs = data.pop('img')
+
+            # --- standard model forward ---
             result_dict = my_model(imgs=input_imgs, metas=data)
+
+            # --- ★ ensemble: render ALL stages & fuse ★ ---
+            all_gaussians = result_dict['gaussians']
+            sampled_xyz = result_dict['sampled_xyz']
+
+            # Render occupancy logits for every decoder stage
+            all_occs = render_all_stage_occupancies(
+                head=raw_model.head,
+                gaussians=all_gaussians,
+                sampled_xyz=sampled_xyz,
+            )
+
+            # Fuse via equal-weight logit averaging → hard labels
+            _fused_logits, hard_labels = fuse_stage_occupancies(all_occs)
+            # hard_labels: (B, N)
+
+            # --- metrics accumulation (same logic as eval.py) ---
             if 'final_occ' in result_dict:
-                for idx, pred in enumerate(result_dict['final_occ']):
-                    pred_occ = pred
-                    gt_occ = result_dict['sampled_label'][idx]
+                batch_size = hard_labels.shape[0]
+                for idx in range(batch_size):
+                    pred_occ = hard_labels[idx]          # (N,)
+                    gt_occ = result_dict['sampled_label'][idx]  # (N,)
                     if cfg.dataset_name_flag == 'surroundocc':
                         occ_mask = result_dict['occ_cam_mask'][idx].flatten()
                         miou_metric._after_step(pred_occ, gt_occ, occ_mask)
@@ -191,18 +254,21 @@ def main(local_rank, args):
                             result_dict, 'occ_lidar_mask', idx)
                         miou_metric.add_batch(
                             pred_occ, gt_occ, occ_lidar_mask, occ_cam_mask)
-                    # breakpoint()
             
             if i_iter_val % print_freq == 0 and local_rank == 0:
-                logger.info('[EVAL] Iter %5d'%(i_iter_val))
+                logger.info('[ENSEMBLE EVAL] Iter %5d' % (i_iter_val))
+
+    # =====================================================================
+    #  Phase 5:  Results  (identical to eval.py)
+    # =====================================================================
 
     if cfg.dataset_name_flag == 'surroundocc':       
         miou, iou2 = miou_metric._after_epoch()
-        logger.info(f'mIoU: {miou}, iou2: {iou2}')
+        logger.info(f'[ENSEMBLE] mIoU: {miou}, iou2: {iou2}')
         miou_metric.reset()
     elif cfg.dataset_name_flag == 'occ3d':
         eval_results = miou_metric.count_miou_metric()
-        logger.info(eval_results)
+        logger.info(f'[ENSEMBLE] {eval_results}')
 
     
     if writer is not None:
@@ -211,7 +277,7 @@ def main(local_rank, args):
 
 if __name__ == '__main__':
     # Training settings
-    parser = argparse.ArgumentParser(description='')
+    parser = argparse.ArgumentParser(description='Multi-Stage Gaussian Ensemble Evaluation')
     parser.add_argument('--py-config', default='config/tpv_lidarseg.py')
     parser.add_argument('--work-dir', type=str, default='./out/tpv_lidarseg')
     parser.add_argument('--resume-from', type=str, default='')

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-dataset_analysis.py — NuScenes 数据集场景融合熵统计脚本 (多进程版本)
+dataset_analysis_cuda.py — NuScenes 数据集场景融合熵统计脚本 (CUDA 精确版)
 
 从融合 0 帧逐步统计到融合 16 帧的:
   - 平均场景熵 (基于体素点分布的香农熵)
@@ -24,9 +24,9 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('NUMEXPR_NUM_THREADS', '1')
 
 import numpy as np
+import torch
 from tqdm import tqdm
 
-from model.lifter.spconv_voxelize import VoxelGeneratorWrapper
 from draw_nuscene_dataset import (
     load_pkl,
     load_lidar_points,
@@ -55,75 +55,210 @@ GAIN_EPS = 0.0
 # 批量计算 DECI 时的最大体素批大小，限制临时矩阵的峰值内存。
 DECI_BATCH_SIZE = 65536
 
+# DECI 只可能取 0~3 维。常数表在模块加载时计算一次，避免每个批次
+# 重复执行幂运算；这只是缓存原公式中的精确常数，不改变数学定义。
+DECI_CONSTANTS = np.power(2.0 * np.pi * np.e, np.arange(4))
 
-def create_voxel_generator():
+
+class CUDAVoxelGeneratorWrapper:
+    """确定性的 CUDA 硬体素化器。
+
+    稳定排序保证每个体素保留输入顺序中的前 max_points 个点，与 CPU
+    Point2Voxel 的选择语义一致，避免 hash/atomic kernel 的随机写入顺序。
+    """
+
+    def __init__(self, vsize_xyz, coors_range_xyz, num_point_features,
+                 max_num_points_per_voxel, max_num_voxels, device='cuda:0'):
+        self.device = torch.device(device)
+        self.num_point_features = num_point_features
+        self.max_num_voxels = max_num_voxels
+        self.max_points = max_num_points_per_voxel
+        self.vsize = torch.tensor(
+            vsize_xyz, dtype=torch.float32, device=self.device
+        )
+        self.range_min = torch.tensor(
+            coors_range_xyz[:3], dtype=torch.float32, device=self.device
+        )
+        self.grid_size = torch.tensor(
+            [
+                round((coors_range_xyz[i + 3] - coors_range_xyz[i])
+                      / vsize_xyz[i])
+                for i in range(3)
+            ],
+            dtype=torch.int64,
+            device=self.device,
+        )
+
+    @torch.inference_mode()
+    def generate(self, points):
+        # np.ascontiguousarray 不改变点顺序。
+        points = np.ascontiguousarray(points, dtype=np.float32)
+        points_cuda = torch.from_numpy(points).to(self.device)
+        coords_xyz = torch.floor(
+            (points_cuda[:, :3] - self.range_min) / self.vsize
+        ).to(torch.int64)
+        in_range = torch.all(
+            (coords_xyz >= 0) & (coords_xyz < self.grid_size), dim=1
+        )
+        points_cuda = points_cuda[in_range]
+        coords_xyz = coords_xyz[in_range]
+        if points_cuda.shape[0] == 0:
+            return (
+                torch.empty((0, self.max_points, self.num_point_features),
+                            dtype=torch.float32, device=self.device),
+                torch.empty((0, 3), dtype=torch.int32, device=self.device),
+                torch.empty((0,), dtype=torch.int32, device=self.device),
+            )
+
+        keys = (
+            coords_xyz[:, 0]
+            + self.grid_size[0] * (
+                coords_xyz[:, 1] + self.grid_size[1] * coords_xyz[:, 2]
+            )
+        )
+        order = torch.argsort(keys, stable=True)
+        keys = keys[order]
+        sorted_points = points_cuda[order]
+        sorted_coords = coords_xyz[order]
+
+        is_first = torch.ones_like(keys, dtype=torch.bool)
+        is_first[1:] = keys[1:] != keys[:-1]
+        group_ids = torch.cumsum(is_first, dim=0) - 1
+        positions = torch.arange(keys.numel(), device=self.device)
+        group_starts = torch.cummax(
+            torch.where(is_first, positions, torch.zeros_like(positions)), dim=0
+        ).values
+        point_slots = positions - group_starts
+        keep = point_slots < self.max_points
+
+        group_ids = group_ids[keep]
+        point_slots = point_slots[keep]
+        sorted_points = sorted_points[keep]
+        num_voxels = int(group_ids[-1].item()) + 1
+        if num_voxels > self.max_num_voxels:
+            # 当前配置的空间网格最多 640000 个体素，小于 1600000 上限；
+            # 保留通用保护，避免静默改变 max_voxels 语义。
+            raise RuntimeError(
+                '唯一体素数超过 max_num_voxels；需实现首遇体素截断语义'
+            )
+
+        voxels = torch.zeros(
+            (num_voxels, self.max_points, self.num_point_features),
+            dtype=torch.float32, device=self.device,
+        )
+        voxels[group_ids, point_slots] = sorted_points
+        counts = torch.bincount(
+            group_ids, minlength=num_voxels
+        ).to(torch.int32)
+        # spconv 坐标采用 z,y,x；熵计算不依赖坐标，仅保持接口一致。
+        first_indices = torch.nonzero(is_first, as_tuple=False).flatten()
+        coordinates = sorted_coords[first_indices]
+        coordinates = coordinates[:, [2, 1, 0]].to(torch.int32)
+        return voxels, coordinates, counts
+
+
+def create_voxel_generator(device='cuda:0'):
     """创建与现有代码参数一致的体素生成器"""
-    return VoxelGeneratorWrapper(
+    return CUDAVoxelGeneratorWrapper(
         vsize_xyz=VOXEL_SIZE,
         coors_range_xyz=PC_RANGE,
         num_point_features=4,
         max_num_points_per_voxel=MAX_POINTS_PER_VOXEL,
         max_num_voxels=MAX_VOXELS,
+        device=device,
     )
 
 
 def compute_deci_values_batched(voxels, num_points, batch_size=DECI_BATCH_SIZE):
-    """批量计算每个非空体素的 DECI，公式与 compute_voxel_deci 一致。"""
-    voxel_count = len(num_points)
-    deci_values = np.zeros(voxel_count, dtype=np.float64)
+    """在 CUDA 上批量计算 DECI，数学公式与 CPU 版本严格一致。
+
+    优化仅减少无效计算和临时数组：单点体素的 DECI 按定义恒为 0，
+    因此不送入协方差和特征值分解；中心化则复用点坐标缓冲区。
+    """
+    counts_all = num_points.to(dtype=torch.int64)
+    voxel_count = counts_all.numel()
+    deci_values = torch.zeros(
+        voxel_count, dtype=torch.float64, device=voxels.device
+    )
     if voxel_count == 0:
+        return deci_values
+
+    if not torch.any(counts_all > 1):
         return deci_values
 
     # 原实现 compute_voxel_deci() 使用标量 vsize=0.5。
     vsize = float(VOXEL_SIZE[0])
     max_points = voxels.shape[1]
-    point_indices = np.arange(max_points)[None, :]
+    point_indices = torch.arange(max_points, device=voxels.device)[None, :]
+    constants = torch.as_tensor(
+        DECI_CONSTANTS, dtype=torch.float64, device=voxels.device
+    )
 
+    # batch_size 仍表示输入体素批大小，确保优化版的峰值内存不会因
+    # “只按有效体素计数”而意外超过原版。
     for start in range(0, voxel_count, batch_size):
         end = min(start + batch_size, voxel_count)
-        counts = np.asarray(num_points[start:end], dtype=np.int64)
-        valid_voxels = counts > 1
-        if not np.any(valid_voxels):
+        selected_indices = (
+            start + torch.nonzero(
+                counts_all[start:end] > 1, as_tuple=False
+            ).flatten()
+        )
+        if selected_indices.numel() == 0:
             continue
+        counts = counts_all[selected_indices]
 
         # 保持输入点云 dtype，确保与原逐体素实现的数值精度一致。
-        points = np.asarray(voxels[start:end, :, :3]) / vsize
+        # 高级索引已经返回独立数组，原地归一化可避免再复制一份坐标。
+        points = voxels[selected_indices, :, :3] / vsize
         mask = point_indices < counts[:, None]
         points *= mask[..., None]
-        means = points.sum(axis=1) / np.maximum(counts[:, None], 1)
+        means = points.sum(axis=1) / counts[:, None]
+
+        # 只为有效体素生成中心化数组；相比原实现仍按单点体素占比同比
+        # 降低峰值内存，同时保留 NumPy 原表达式的求值和舍入路径。
         centered = (points - means[:, None, :]) * mask[..., None]
-        covariances = np.einsum(
-            'bpi,bpj->bij', centered, centered, optimize=True
-        ) / np.maximum(counts - 1, 1)[:, None, None]
+        covariances = torch.bmm(
+            centered.transpose(1, 2), centered
+        ) / (counts - 1)[:, None, None]
 
-        eigenvalues = np.linalg.eigvalsh(covariances)
-        eigenvalues = np.sort(np.abs(eigenvalues), axis=1)[:, ::-1]
-        eigenvalues = np.clip(eigenvalues, 1e-10, None)
+        eigenvalues = torch.linalg.eigvalsh(covariances)
+        eigenvalues = torch.sort(
+            torch.abs(eigenvalues), dim=1, descending=True
+        ).values
+        eigenvalues = torch.clamp(eigenvalues, min=1e-10)
 
-        ranks = np.sum(
-            eigenvalues > 0.01 * eigenvalues[:, :1], axis=1
-        ).astype(np.int64)
-        ranks = np.minimum(ranks, np.minimum(counts - 1, 3))
-        normalized = eigenvalues / eigenvalues.sum(axis=1, keepdims=True)
+        ranks = torch.sum(
+            eigenvalues > 0.01 * eigenvalues[:, :1], dim=1
+        ).to(torch.int64)
+        ranks = torch.minimum(
+            ranks, torch.minimum(counts - 1, torch.full_like(counts, 3))
+        )
+        normalized = eigenvalues / eigenvalues.sum(dim=1, keepdim=True)
 
-        products = np.ones(end - start, dtype=np.float64)
+        products = torch.ones(
+            selected_indices.numel(), dtype=torch.float64,
+            device=voxels.device,
+        )
         for rank in (1, 2, 3):
             selected = ranks == rank
-            if np.any(selected):
-                products[selected] = np.prod(
-                    normalized[selected, :rank], axis=1
-                )
+            if torch.any(selected):
+                products[selected] = torch.prod(
+                    normalized[selected, :rank], dim=1
+                ).to(torch.float64)
 
-        constants = np.power(2.0 * np.pi * np.e, ranks)
-        entropy = 0.5 * np.log(constants * products + 1.0)
-        valid_entropy = valid_voxels & (ranks > 0) & (entropy > 0)
-        batch_deci = np.zeros(end - start, dtype=np.float64)
+        entropy = 0.5 * torch.log(constants[ranks] * products + 1.0)
+        valid_entropy = (ranks > 0) & (entropy > 0)
+        batch_deci = torch.zeros(
+            selected_indices.numel(), dtype=torch.float64,
+            device=voxels.device,
+        )
         batch_deci[valid_entropy] = 1.0 / entropy[valid_entropy]
-        deci_values[start:end] = batch_deci
+        deci_values[selected_indices] = batch_deci
 
     return deci_values
 
 
+@torch.inference_mode()
 def compute_both_entropies(points, vg):
     """
     对单组点云计算场景熵 + 局部 DECI 熵统计。
@@ -142,27 +277,49 @@ def compute_both_entropies(points, vg):
     else:
         # 场景熵与局部熵共享一次体素化结果。
         voxels, coords, num_points = vg.generate(points)
-        if len(num_points) == 0:
+        if num_points.numel() == 0:
             H = 0.0
             deci = {
                 'max': 0.0, 'min': 0.0, 'mean': 0.0,
                 'above_mean_ratio': 0.0,
             }
         else:
-            counts = np.asarray(num_points, dtype=np.int64)
-            total_points = int(counts.sum())
-            probabilities = counts.astype(np.float64) / total_points
-            H = float(-np.sum(probabilities * np.log(probabilities)))
+            counts = num_points.to(dtype=torch.int64)
+            total_points = counts.sum()
+            # -sum(p*log(p)) 的严格恒等形式：
+            # log(N) - sum(n_i*log(n_i))/N。避免 probabilities 中间数组
+            # 以及对一次除法结果再取对数，不使用任何数学近似。
+            counts_float = counts.to(dtype=torch.float64)
+            H = (
+                torch.log(total_points.to(torch.float64))
+                - torch.dot(counts_float, torch.log(counts_float))
+                / total_points
+            )
 
             deci_values = compute_deci_values_batched(voxels, counts)
-            weighted_sum = np.dot(deci_values, counts)
-            deci_mean = float(weighted_sum / total_points)
-            above_points = counts[deci_values > deci_mean].sum()
+            deci_mean = torch.dot(
+                deci_values, counts_float
+            ) / total_points
+            above_ratio = (
+                counts[deci_values > deci_mean].sum() / total_points
+            )
+
+            # 一次同步取回全部标量，避免多个 .item() 形成串行同步点。
+            scalar_values = torch.stack((
+                H,
+                torch.max(deci_values),
+                torch.min(deci_values),
+                deci_mean,
+                above_ratio,
+            )).cpu().tolist()
+            H, deci_max, deci_min, deci_mean_value, above_ratio_value = (
+                scalar_values
+            )
             deci = {
-                'max': float(np.max(deci_values)),
-                'min': float(np.min(deci_values)),
-                'mean': deci_mean,
-                'above_mean_ratio': float(above_points / total_points),
+                'max': deci_max,
+                'min': deci_min,
+                'mean': deci_mean_value,
+                'above_mean_ratio': above_ratio_value,
             }
     combined = (
         SCENE_ENTROPY_WEIGHT * H
@@ -214,26 +371,27 @@ def process_single_scene(args):
     """
     多进程 worker 入口: 处理单个场景的全部帧和融合级别。
 
-    每个 worker 独立创建 VoxelGeneratorWrapper, 因为 spconv/cumm 内部
-    的 C++ 对象不可跨进程 pickle 序列化。
+    单 GPU 进程创建确定性 CUDA 体素生成器，场景内部由 CUDA 并行。
 
     Args:
         args: tuple of (scene_token, frames, data_root, max_fusion, N,
-                         pc_range, voxel_size, max_pts_per_voxel, max_voxels)
+                         pc_range, voxel_size, max_pts_per_voxel, max_voxels,
+                         device)
 
     Returns:
         tuple: 场景标识、帧数、逐级均值及供主进程合并的累加统计。
     """
     (scene_token, frames, data_root, max_fusion, N,
-     pc_range, voxel_size, max_pts_per_voxel, max_voxels) = args
+     pc_range, voxel_size, max_pts_per_voxel, max_voxels, device) = args
 
     # 每个 worker 独立创建 VoxelGenerator
-    vg = VoxelGeneratorWrapper(
+    vg = CUDAVoxelGeneratorWrapper(
         vsize_xyz=voxel_size,
         coors_range_xyz=pc_range,
         num_point_features=4,
         max_num_points_per_voxel=max_pts_per_voxel,
         max_num_voxels=max_voxels,
+        device=device,
     )
 
     # 场景级累加器
@@ -391,7 +549,9 @@ def process_single_scene(args):
 # ===========================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='NuScenes 场景融合熵统计 (多进程)')
+    parser = argparse.ArgumentParser(
+        description='NuScenes 场景融合熵统计 (CUDA 确定性版)'
+    )
     parser.add_argument(
         '--pkl_path',
         default='./data/nuscenes_cam/nuscenes_infos_train_sweeps_occ.pkl',
@@ -412,23 +572,32 @@ def main():
         '--num_workers',
         type=int,
         default=None,
-        help='并行 worker 进程数 (默认: min(CPU 核心数, 8))',
+        help='CUDA 场景 worker 数；单 GPU 必须为 1 (默认 1)',
+    )
+    parser.add_argument(
+        '--device',
+        default='cuda:0',
+        help='CUDA 设备 (默认 cuda:0)',
     )
     parser.add_argument(
         '--output',
-        default='entropy_result.txt',
+        default='entropy_result_cuda.txt',
         help='输出文件路径',
     )
     args = parser.parse_args()
 
-    import multiprocessing as mp
-
     if args.num_workers is None:
-        # 体素化和特征值计算受内存带宽影响明显，保守默认值可避免
-        # worker 过多导致内存争用；仍可通过命令行覆盖。
-        args.num_workers = min(mp.cpu_count(), 8)
-    elif args.num_workers < 1:
         args.num_workers = 1
+    if args.num_workers != 1:
+        raise ValueError(
+            '单 GPU CUDA 版本要求 --num_workers=1，避免多进程争抢显存'
+        )
+    if not torch.cuda.is_available():
+        raise RuntimeError('CUDA 不可用；请检查 NVIDIA 驱动与执行环境')
+    device = torch.device(args.device)
+    if device.type != 'cuda':
+        raise ValueError('--device 必须是 CUDA 设备，例如 cuda:0')
+    torch.cuda.set_device(device)
 
     if not os.path.exists(args.pkl_path):
         raise FileNotFoundError(f"pkl 文件不存在: {args.pkl_path}")
@@ -452,7 +621,7 @@ def main():
     # ------------------------------------------------------------------
     tasks = [
         (scene_token, frames, args.data_root, max_fusion, N,
-         PC_RANGE, VOXEL_SIZE, MAX_POINTS_PER_VOXEL, MAX_VOXELS)
+         PC_RANGE, VOXEL_SIZE, MAX_POINTS_PER_VOXEL, MAX_VOXELS, args.device)
         for scene_token, frames in infos.items()
     ]
 
@@ -475,40 +644,33 @@ def main():
     per_scene_data = []
 
     # ------------------------------------------------------------------
-    # 4. 多进程执行
+    # 4. 单 GPU 顺序调度场景；每个场景内部由 CUDA 大规模并行
     # ------------------------------------------------------------------
-    print(f"\nDispatching {num_scenes} scenes to {args.num_workers} workers...")
-    with mp.Pool(processes=args.num_workers) as pool:
-        results = list(tqdm(
-            pool.imap_unordered(process_single_scene, tasks),
-            total=len(tasks),
-            desc='Scenes (parallel)',
-        ))
+    print(f"\nDispatching {num_scenes} scenes to {args.device}...")
+    results = map(process_single_scene, tasks)
+    for result in tqdm(results, total=len(tasks), desc='Scenes (CUDA)'):
+        (scene_token, total_frames, valid_keyframes, scene_avgs,
+         s_H, s_dmax, s_dmin, s_dmean, s_dabove, s_combined, s_count,
+         s_gain_H, s_gain_combined, s_gain_count,
+         s_negative_count, s_recovered_count, s_total_gain_count) = result
 
-        for result in results:
-            (scene_token, total_frames, valid_keyframes, scene_avgs,
-             s_H, s_dmax, s_dmin, s_dmean, s_dabove, s_combined, s_count,
-             s_gain_H, s_gain_combined, s_gain_count,
-             s_negative_count, s_recovered_count, s_total_gain_count) = result
+        per_scene_data.append(
+            (scene_token, total_frames, valid_keyframes, scene_avgs)
+        )
 
-            per_scene_data.append(
-                (scene_token, total_frames, valid_keyframes, scene_avgs)
-            )
-
-            # 合并全局累加
-            global_H += s_H
-            global_deci_max += s_dmax
-            global_deci_min += s_dmin
-            global_deci_mean += s_dmean
-            global_deci_above += s_dabove
-            global_combined += s_combined
-            global_count += s_count
-            global_gain_H += s_gain_H
-            global_gain_combined += s_gain_combined
-            global_gain_count += s_gain_count
-            global_negative_gain_count += s_negative_count
-            global_recovered_negative_count += s_recovered_count
-            global_total_gain_count += s_total_gain_count
+        global_H += s_H
+        global_deci_max += s_dmax
+        global_deci_min += s_dmin
+        global_deci_mean += s_dmean
+        global_deci_above += s_dabove
+        global_combined += s_combined
+        global_count += s_count
+        global_gain_H += s_gain_H
+        global_gain_combined += s_gain_combined
+        global_gain_count += s_gain_count
+        global_negative_gain_count += s_negative_count
+        global_recovered_negative_count += s_recovered_count
+        global_total_gain_count += s_total_gain_count
 
     # imap_unordered 的完成顺序不固定，排序后保证输出可复现。
     per_scene_data.sort(key=lambda item: item[0])
@@ -521,12 +683,13 @@ def main():
         sub = "-" * 80
 
         f.write(sep + "\n")
-        f.write("  NuScenes 数据集场景融合熵统计结果 (多进程)\n")
+        f.write("  NuScenes 数据集场景融合熵统计结果 (CUDA 确定性版)\n")
         f.write(f"  pkl 路径: {args.pkl_path}\n")
         f.write(f"  数据根目录: {args.data_root}\n")
         f.write(f"  体素配置: vsize={VOXEL_SIZE}, max_pts={MAX_POINTS_PER_VOXEL}\n")
         f.write(f"  最大融合帧数: {max_fusion}\n")
         f.write(f"  Worker 数量: {args.num_workers}\n")
+        f.write(f"  CUDA 设备: {args.device}\n")
         f.write(
             "  组合熵: "
             f"{SCENE_ENTROPY_WEIGHT:.1f} * 场景熵 + "

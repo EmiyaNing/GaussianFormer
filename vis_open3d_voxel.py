@@ -1072,7 +1072,7 @@ def create_ellipsoid(center, radii, rotation, color, opacity=1.0, resolution=4):
 @memory_monitor
 def save_gaussian(
         save_dir, gaussian_data, name, scalar=1.5, ignore_opa=False,
-        filter_zsize=False, show_window=True, max_gaussians=25600,
+        filter_zsize=False, show_window=True, max_gaussians=51200,
         adaptive_color=False, adaptive_color_seed=42,
         allocation_color=False, allocation_op_ids=None,
         allocation_color_map=None):
@@ -1197,15 +1197,7 @@ def save_gaussian(
         if np.allclose(base_color, [1.0, 1.0, 1.0], atol=0.1):
             continue
 
-        if allocation_colors is not None:
-            color = base_color
-        elif adaptive_colors is not None:
-            color = base_color
-        else:
-            # 根据不透明度混入白色背景：透明度越低 → 越接近白色
-            opa_val = float(opas[idx])
-            opa_val = np.clip(opa_val, 0.0, 1.0)
-            color = base_color * opa_val + np.array([1.0, 1.0, 1.0]) * (1.0 - opa_val)
+        color = base_color
 
         # 缩放 -> 旋转 -> 平移
         transformed_vertices = base_vertices * radii

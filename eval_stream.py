@@ -162,7 +162,7 @@ def main(local_rank, args):
     # 全局指标（等效于 eval.py 的累积方式）
     global_miou = MeanIoU(
         CLASS_INDICES, NUM_CLASSES, CLASS_NAMES,
-        True, NUM_CLASSES, filter_minmax=False)
+        True, 0, filter_minmax=False)
     global_miou.reset()
 
     # 场景级指标
@@ -247,7 +247,7 @@ def main(local_rank, args):
                 current_scene = scene_token
                 per_scene_mious[current_scene] = MeanIoU(
                     CLASS_INDICES, NUM_CLASSES, CLASS_NAMES,
-                    True, NUM_CLASSES, filter_minmax=False,
+                    True, 0, filter_minmax=False,
                     name=current_scene)
                 per_scene_mious[current_scene].reset()
                 scene_frame_counts[current_scene] = 0

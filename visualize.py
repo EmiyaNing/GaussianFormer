@@ -593,23 +593,24 @@ def main(local_rank, args):
     from misc.metric_util import MeanIoU
     miou_metric = MeanIoU(
         list(range(1, 17)),
-        17, #17,
+        0,
         ['barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
          'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
          'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
          'vegetation'],
-         True, 17, filter_minmax=False)
+         True, 0, filter_minmax=False)
     miou_metric.reset()
 
     my_model.eval()
     os.environ['eval'] = 'true'
+    # 原始相机图像会在验证循环中无条件保存，因此输出目录也必须
+    # 无条件初始化。此前仅在启用 --vis-* 参数时创建，未传可视化
+    # 开关会在首次 ori_img.save() 时触发 UnboundLocalError。
+    save_dir = os.path.join(args.work_dir, f'vis_ep{args.epoch}')
+    os.makedirs(save_dir, exist_ok=True)
+
     allocation_vis_enabled = (
         args.vis_gaussian_allocation_color or args.allocation_statistic)
-    if (args.vis_occ or args.vis_occ_error or args.vis_gaussian or
-            args.vis_gaussian_point or args.vis_gaussian_topdown or
-            args.vis_gaussian_match or allocation_vis_enabled):
-        save_dir = os.path.join(args.work_dir, f'vis_ep{args.epoch}')
-        os.makedirs(save_dir, exist_ok=True)
     if args.model_type == "base":
         draw_gaussian_params = dict(
             scalar = 1.5,
@@ -636,7 +637,9 @@ def main(local_rank, args):
                 allocation_collector.start_iter(i_iter_val, f'val_{i_iter_val}')
 
                 for k in list(data.keys()):
-                    if isinstance(data[k], torch.Tensor):
+                    if (isinstance(data[k], torch.Tensor) and not (
+                            k == 'lidar_points' and
+                            cfg.get('keep_lidar_points_cpu', False))):
                         data[k] = data[k].cuda()
                 input_imgs = data.pop('img')
                 ori_imgs = data.pop('ori_img')
@@ -950,7 +953,7 @@ def main_stream(local_rank, args):
     ]
     global_miou = MeanIoU(
         CLASS_INDICES, NUM_CLASSES, CLASS_NAMES,
-        True, NUM_CLASSES, filter_minmax=False)
+        True, 0, filter_minmax=False)
     global_miou.reset()
     per_scene_mious = {}
     scene_results = {}
@@ -1003,7 +1006,7 @@ def main_stream(local_rank, args):
                 current_scene = scene_token
                 per_scene_mious[current_scene] = MeanIoU(
                     CLASS_INDICES, NUM_CLASSES, CLASS_NAMES,
-                    True, NUM_CLASSES, filter_minmax=False,
+                    True, 0, filter_minmax=False,
                     name=current_scene)
                 per_scene_mious[current_scene].reset()
                 scene_frame_counts[current_scene] = 0
@@ -1028,7 +1031,9 @@ def main_stream(local_rank, args):
 
             # ── 数据移至 GPU ──
             for k in list(data.keys()):
-                if isinstance(data[k], torch.Tensor):
+                if (isinstance(data[k], torch.Tensor) and not (
+                        k == 'lidar_points' and
+                        cfg.get('keep_lidar_points_cpu', False))):
                     data[k] = data[k].cuda()
                 elif isinstance(data[k], np.ndarray):
                     data[k] = torch.from_numpy(data[k]).cuda()

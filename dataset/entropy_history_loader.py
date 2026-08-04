@@ -1,102 +1,20 @@
-"""
-基于熵增益的自适应历史帧窗口选择器。
-
-在数据加载阶段，根据融合历史帧后点云复合场景熵的变化量（熵增益），
-动态决定实际使用的历史帧数量，避免无效帧的冗余计算。
-
-复合场景熵 = 0.4 × scene_entropy + 0.6 × max_voxel_deci
-熵增益 = 复合场景熵(融合后) - 复合场景熵(融合前)
-"""
+"""基于组合熵增益的自适应历史帧选择引擎。"""
 
 import os
-import math
+from collections import OrderedDict
+
 import numpy as np
-from model.lifter.spconv_voxelize import VoxelGeneratorWrapper
+
+from dataset.entropy_core import compute_composite_entropy
 from dataset.utils import get_lidar2global, get_img2global
+from model.lifter.spconv_voxelize import VoxelGeneratorWrapper
 
-
-# ---------------------------------------------------------------------------
-# 场景熵计算函数
-# ---------------------------------------------------------------------------
-
-def _scene_entropy(points, voxel_generator):
-    """体素化点云的香农熵: H = -Σ p_i·ln(p_i), p_i = 体素内点数/总点数"""
-    if points.shape[0] == 0:
-        return 0.0
-    _, _, num_points = voxel_generator.generate(points)
-    if num_points.shape[0] == 0:
-        return 0.0
-    total_points = num_points.sum()
-    probs = num_points.astype(np.float64) / total_points
-    valid = probs > 0
-    return float(-np.sum(probs[valid] * np.log(probs[valid])))
-
-
-def _compute_voxel_deci(points_in_voxel, vsize=0.5):
-    """单个体素的 DECI (Differential Entropy-based Compactness Index)"""
-    k = points_in_voxel.shape[0]
-    if k <= 1:
-        return 0.0
-
-    points_normalized = points_in_voxel / vsize
-    mean = points_normalized.mean(axis=0)
-    centered = points_normalized - mean
-    cov = (centered.T @ centered) / (k - 1)
-
-    eigenvalues = np.linalg.eigvalsh(cov)
-    eigenvalues = np.abs(eigenvalues)
-    eigenvalues = np.sort(eigenvalues)[::-1]
-    eigenvalues = np.clip(eigenvalues, 1e-10, None)
-
-    lambda_max = eigenvalues[0]
-    r = int(np.sum(eigenvalues > 0.01 * lambda_max))
-    r = min(r, min(k - 1, 3))
-
-    eigenvalues = eigenvalues / eigenvalues.sum()
-    if r == 0:
-        return 0.0
-
-    prod = np.prod(eigenvalues[:r])
-    constant = (2.0 * math.pi * math.e) ** r
-    h = 0.5 * math.log(constant * prod + 1.0)
-    return float(1.0 / h) if h > 0 else 0.0
-
-
-def _max_voxel_deci(points, voxel_generator):
-    """点云中所有体素 DECI 的最大值"""
-    if points.shape[0] == 0:
-        return 0.0
-    voxels, coords, num_pts = voxel_generator.generate(points)
-    M = coords.shape[0]
-    if M == 0:
-        return 0.0
-
-    max_val = 0.0
-    for i in range(M):
-        k = int(num_pts[i])
-        pts_xyz = voxels[i, :k, :3]
-        deci = _compute_voxel_deci(pts_xyz)
-        if deci > max_val:
-            max_val = deci
-    return max_val
-
-
-# ---------------------------------------------------------------------------
-# 主类
-# ---------------------------------------------------------------------------
 
 class EntropyBasedHistoryLoader:
-    """基于熵增益的自适应历史帧窗口选择器。
+    """按组合熵增益选择与当前帧对齐的历史 LiDAR/图像帧。
 
-    在 get_data_info() 阶段调用 forward()，根据融合历史帧后
-    复合场景熵的变化量动态选择实际使用的历史帧数量。
-
-    Args:
-        max_window:            最大历史帧融合窗口
-        min_window:            最小历史帧融合窗口
-        entropy_gain_threshold: 熵增益阈值，低于此值时停止融合
-        data_root:             NuScenes 数据根目录
-        pc_range:              点云范围 [x_min, y_min, z_min, x_max, y_max, z_max]
+    组合熵为 ``0.4 * scene_entropy + 0.6 * topk_deci_mean``。
+    当完整窗口剩余收益比例低于阈值时，保留当前候选并停止继续搜索。
     """
 
     SENSOR_TYPES = [
@@ -104,197 +22,285 @@ class EntropyBasedHistoryLoader:
         'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT',
     ]
 
-    def __init__(self, max_window, min_window, entropy_gain_threshold,
-                 data_root, pc_range):
-        assert max_window >= min_window >= 1, (
-            f"max_window({max_window}) >= min_window({min_window}) >= 1"
+    def __init__(
+        self,
+        max_window,
+        min_window,
+        entropy_gain_ratio_threshold,
+        data_root,
+        pc_range,
+        voxel_size=(0.5, 0.5, 0.5),
+        max_points_per_voxel=20,
+        max_voxels=1600000,
+        deci_batch_size=65536,
+        deci_topk=64,
+        point_cache_size=64,
+        include_history_images=True,
+    ):
+        if not max_window >= min_window >= 0:
+            raise ValueError(
+                f'max_window({max_window}) >= min_window({min_window}) >= 0 '
+                'is required.'
+            )
+        if not 0.0 <= entropy_gain_ratio_threshold <= 1.0:
+            raise ValueError(
+                'entropy_gain_ratio_threshold must be within [0, 1].'
+            )
+
+        self.max_window = int(max_window)
+        self.min_window = int(min_window)
+        self.entropy_gain_ratio_threshold = float(
+            entropy_gain_ratio_threshold
         )
-        self.max_window = max_window
-        self.min_window = min_window
-        self.entropy_gain_threshold = entropy_gain_threshold
         self.data_root = data_root
-        self.pc_range = pc_range
+        self.pc_range = tuple(pc_range)
+        self.voxel_size = tuple(voxel_size)
+        self.max_points_per_voxel = int(max_points_per_voxel)
+        self.max_voxels = int(max_voxels)
+        self.deci_batch_size = int(deci_batch_size)
+        if deci_topk < 1:
+            raise ValueError('deci_topk must be at least 1.')
+        self.deci_topk = int(deci_topk)
+        if point_cache_size < 0:
+            raise ValueError('point_cache_size must be non-negative.')
+        self.point_cache_size = int(point_cache_size)
+        self.include_history_images = bool(include_history_images)
+        self._voxel_generator = None
+        self._point_cache = OrderedDict()
 
-        self._voxel_generator = VoxelGeneratorWrapper(
-            vsize_xyz=[0.5, 0.5, 0.5],
-            coors_range_xyz=pc_range,
-            num_point_features=4,
-            max_num_points_per_voxel=20,
-            max_num_voxels=1600000,
-        )
-
-    # ------------------------------------------------------------------
-    # 公开接口
-    # ------------------------------------------------------------------
+    def _get_voxel_generator(self):
+        # DataLoader worker 首次使用时创建，避免跨进程传递 C++ 对象。
+        if self._voxel_generator is None:
+            self._voxel_generator = VoxelGeneratorWrapper(
+                vsize_xyz=self.voxel_size,
+                coors_range_xyz=self.pc_range,
+                num_point_features=4,
+                max_num_points_per_voxel=self.max_points_per_voxel,
+                max_num_voxels=self.max_voxels,
+            )
+        return self._voxel_generator
 
     def forward(self, scene_infos, scene_token, frame_index):
-        """主入口：根据熵增益选择历史帧，返回选中帧的元信息及熵增益值。
-
-        Returns:
-            tuple: (selected_frames, gain_values)
-                selected_frames -- list[dict], 每个 dict 包含:
-                    pts_filename  -- 点云文件绝对路径
-                    lidar_pose    -- LiDAR→global 的 4×4 变换矩阵
-                    points        -- (N,4) 已变换到当前帧坐标系的点云
-                    img_files     -- dict[cam_type] → 图像绝对路径
-                    lidar2img     -- dict[cam_type] → lidar2img 4×4 矩阵
-                    ego2img       -- dict[cam_type] → ego2img 4×4 矩阵
-                gain_values -- list[float], 每帧融合后的熵增益值
-        """
+        """返回选择结果以及可供 Pipeline 记录的诊断信息。"""
         current_frame = scene_infos[scene_token][frame_index]
-        lidar_info = current_frame['data']['LIDAR_TOP']
+        lidar_info = current_frame.get('data', {}).get('LIDAR_TOP')
+        if lidar_info is None:
+            raise KeyError(
+                f'Missing LIDAR_TOP: scene={scene_token}, frame={frame_index}'
+            )
+
         current_pose = get_lidar2global(lidar_info['calib'], lidar_info['pose'])
-        ego2global = self._get_ego2global(lidar_info['pose'])
-
-        # 加载当前帧点云用于初始熵计算
-        current_points = self._load_and_filter_lidar(lidar_info['filename'])
-
-        # 批量加载 max_window 帧历史
-        all_history = self._load_all_history(
+        ego2global = (
+            self._get_ego2global(lidar_info['pose'])
+            if self.include_history_images else None
+        )
+        current_points = self._filter_points(
+            self._load_lidar(lidar_info['filename'])
+        )
+        history = self._load_all_history(
             scene_infos, scene_token, frame_index, current_pose, ego2global
         )
 
-        if len(all_history) == 0:
-            return [], []
+        base_entropy = self._entropy(current_points)['combined']
+        entropy_values = [base_entropy]
 
-        # 逐帧融合 + 熵增益判定
-        fused = current_points
-        E_prev = self._composite_entropy(fused)
-        selected = []
-        gain_values = []
+        total_capacity = len(current_points) + sum(
+            len(frame['points']) for frame in history
+        )
+        fused_buffer = np.empty(
+            (total_capacity, current_points.shape[1]), dtype=current_points.dtype
+        )
+        current_size = len(current_points)
+        fused_buffer[:current_size] = current_points
 
-        for h in all_history:
-            fused = np.concatenate([fused, h['points']], axis=0)
-            E_curr = self._composite_entropy(fused)
-            gain = max(0.0, E_curr - E_prev)
-            gain_values.append(gain)
+        # 先构造完整窗口，仅计算 C0 和 C_M 得到 p2；中间 level 按需计算。
+        level_sizes = []
+        for candidate in history:
+            candidate_size = len(candidate['points'])
+            next_size = current_size + candidate_size
+            fused_buffer[current_size:next_size] = candidate['points']
+            level_sizes.append(next_size)
+            current_size = next_size
 
-            # 记录选中帧（保留已加载的点云数据供下游使用）
-            selected.append({
-                'pts_filename': h['pts_filename'],
-                'lidar_pose': h['lidar_pose'],
-                'points': h['points'],
-                'img_files': h['img_files'],
-                'lidar2img': h['lidar2img'],
-                'ego2img': h['ego2img'],
-            })
+        full_window_entropy = (
+            self._entropy(fused_buffer[:current_size])['combined']
+            if history else base_entropy
+        )
+        total_gain = float(full_window_entropy - base_entropy)
+        candidate_gains = []
+        selected_count = 0
+        remaining_gain_ratios = []
+        stop_reason = 'no_more_history'
 
-            if self._should_stop(gain, len(selected)):
-                break
+        if history and total_gain <= 0.0:
+            stop_reason = 'nonpositive_total_gain'
+        else:
+            previous_entropy = base_entropy
+            for level, level_size in enumerate(level_sizes, start=1):
+                current_entropy = (
+                    full_window_entropy
+                    if level == len(level_sizes)
+                    else self._entropy(fused_buffer[:level_size])['combined']
+                )
+                entropy_values.append(current_entropy)
+                candidate_gains.append(
+                    float(current_entropy - previous_entropy)
+                )
+                previous_entropy = current_entropy
+                cumulative_gain = float(current_entropy - base_entropy)
+                remaining_ratio = 1.0 - cumulative_gain / total_gain
+                remaining_gain_ratios.append(float(remaining_ratio))
+                selected_count = level
+                if (level >= self.min_window and
+                        remaining_ratio < self.entropy_gain_ratio_threshold):
+                    stop_reason = 'gain_ratio_threshold'
+                    break
+            if (selected_count == self.max_window and
+                    stop_reason == 'no_more_history'):
+                stop_reason = 'max_history'
 
-            E_prev = E_curr
+        selected = history[:selected_count]
+        accepted_gains = candidate_gains[:selected_count]
+        accepted_size = (
+            level_sizes[selected_count - 1]
+            if selected_count > 0 else len(current_points)
+        )
 
-        return selected, gain_values
+        fused_points = fused_buffer[:accepted_size].copy()
+        return dict(
+            selected_frames=selected,
+            current_points=current_points,
+            fused_points=fused_points,
+            candidate_gains=candidate_gains,
+            accepted_gains=accepted_gains,
+            entropy_values=entropy_values,
+            full_window_entropy=full_window_entropy,
+            total_gain=total_gain,
+            remaining_gain_ratios=remaining_gain_ratios,
+            stop_reason=stop_reason,
+        )
 
-    # ------------------------------------------------------------------
-    # 内部方法
-    # ------------------------------------------------------------------
+    def _entropy(self, points):
+        return compute_composite_entropy(
+            points,
+            self._get_voxel_generator(),
+            voxel_size=self.voxel_size,
+            scene_weight=0.4,
+            local_weight=0.6,
+            deci_batch_size=self.deci_batch_size,
+            deci_topk=self.deci_topk,
+        )
 
-    def _composite_entropy(self, points):
-        """复合场景熵 = 0.4 × scene_entropy + 0.6 × max_voxel_deci"""
-        if points.shape[0] == 0:
-            return 0.0
-        se = _scene_entropy(points, self._voxel_generator)
-        max_deci = _max_voxel_deci(points, self._voxel_generator)
-        return 0.4 * se + 0.6 * max_deci
-
-    def _should_stop(self, gain, fused_count):
-        """判定是否停止融合"""
-        if fused_count >= self.max_window:
-            return True
-        if fused_count >= self.min_window and gain < self.entropy_gain_threshold:
-            return True
-        return False
-
-    def _load_and_filter_lidar(self, lidar_filename):
-        """加载单帧 LiDAR 点云并按 pc_range 过滤"""
+    def _load_lidar(self, lidar_filename):
         lidar_path = (
             lidar_filename if os.path.isabs(lidar_filename)
             else os.path.join(self.data_root, lidar_filename)
         )
+        points = self._point_cache.pop(lidar_path, None)
+        if points is not None:
+            self._point_cache[lidar_path] = points
+            return points
+
         points = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)[:, :4]
+        if self.point_cache_size > 0:
+            self._point_cache[lidar_path] = points
+            while len(self._point_cache) > self.point_cache_size:
+                self._point_cache.popitem(last=False)
+        return points
+
+    def _filter_points(self, points):
         mask = (
-            (points[:, 0] > self.pc_range[0]) & (points[:, 0] < self.pc_range[3]) &
-            (points[:, 1] > self.pc_range[1]) & (points[:, 1] < self.pc_range[4]) &
-            (points[:, 2] > self.pc_range[2]) & (points[:, 2] < self.pc_range[5])
+            (points[:, 0] > self.pc_range[0]) &
+            (points[:, 0] < self.pc_range[3]) &
+            (points[:, 1] > self.pc_range[1]) &
+            (points[:, 1] < self.pc_range[4]) &
+            (points[:, 2] > self.pc_range[2]) &
+            (points[:, 2] < self.pc_range[5])
         )
         return points[mask]
 
     @staticmethod
     def _get_ego2global(pose_dict):
-        """从 LiDAR pose 提取 ego2global 矩阵"""
         from pyquaternion import Quaternion
+
         ego2global = np.eye(4)
-        ego2global[:3, :3] = Quaternion(pose_dict['rotation']).rotation_matrix
+        ego2global[:3, :3] = Quaternion(
+            pose_dict['rotation']
+        ).rotation_matrix
         ego2global[:3, 3] = np.asarray(pose_dict['translation']).T
         return ego2global
 
     @staticmethod
     def _transform_points(points, source_pose, target_pose):
-        """将点云从 source_pose 变换到 target_pose 坐标系"""
         if points.shape[0] == 0:
             return points
-        points_hom = np.concatenate(
-            [points[:, :3], np.ones((points.shape[0], 1), dtype=points.dtype)],
+        points_homogeneous = np.concatenate(
+            [points[:, :3], np.ones((len(points), 1), dtype=points.dtype)],
             axis=-1,
         )
-        T = np.linalg.inv(target_pose) @ source_pose
-        transformed_xyz = (T @ points_hom.T).T[:, :3]
-        if points.shape[1] > 3:
-            return np.concatenate(
-                [transformed_xyz, points[:, 3:]], axis=-1
-            ).astype(points.dtype, copy=False)
-        return transformed_xyz.astype(points.dtype, copy=False)
+        target_from_source = np.linalg.inv(target_pose) @ source_pose
+        transformed_xyz = (
+            target_from_source @ points_homogeneous.T
+        ).T[:, :3]
+        return np.concatenate(
+            [transformed_xyz, points[:, 3:]], axis=-1
+        ).astype(points.dtype, copy=False)
 
     def _has_all_cameras(self, frame):
-        """检查帧是否包含全部 6 视角相机数据"""
         data = frame.get('data', {})
-        return all(cam_type in data for cam_type in self.SENSOR_TYPES)
+        return all(camera in data for camera in self.SENSOR_TYPES)
 
-    def _load_all_history(self, scene_infos, scene_token, frame_index,
-                          target_pose, ego2global):
-        """一次性加载最多 max_window 帧历史（点云 + 图像路径 + 变换矩阵）"""
+    def _load_all_history(
+        self, scene_infos, scene_token, frame_index, target_pose, ego2global
+    ):
         history = []
-        scene_frames = scene_infos[scene_token]
-
-        for prev_idx in range(frame_index - 1, -1, -1):
-            prev_frame = scene_frames[prev_idx]
-
-            lidar_info = prev_frame.get('data', {}).get('LIDAR_TOP')
+        for previous_index in range(frame_index - 1, -1, -1):
+            previous_frame = scene_infos[scene_token][previous_index]
+            lidar_info = previous_frame.get('data', {}).get('LIDAR_TOP')
             if lidar_info is None:
                 continue
-            if not self._has_all_cameras(prev_frame):
+            if self.include_history_images and not self._has_all_cameras(previous_frame):
                 continue
 
-            # 加载并变换点云
-            source_points = self._load_and_filter_lidar(lidar_info['filename'])
-            source_pose = get_lidar2global(lidar_info['calib'], lidar_info['pose'])
-            transformed = self._transform_points(source_points, source_pose, target_pose)
+            source_pose = get_lidar2global(
+                lidar_info['calib'], lidar_info['pose']
+            )
+            # 必须先变换到当前 LiDAR 坐标系，再按目标范围过滤。
+            transformed = self._transform_points(
+                self._load_lidar(lidar_info['filename']),
+                source_pose,
+                target_pose,
+            )
+            transformed = self._filter_points(transformed)
 
-            # 收集图像路径与变换矩阵
-            img_files = {}
-            lidar2img = {}
-            ego2img_dict = {}
-            for cam_type in self.SENSOR_TYPES:
-                cam_info = prev_frame['data'][cam_type]
-                img_files[cam_type] = os.path.join(
-                    self.data_root, cam_info['filename']
+            candidate = dict(
+                frame_index=previous_index,
+                points=transformed,
+                pts_filename=os.path.abspath(os.path.join(
+                    self.data_root, lidar_info['filename']
+                )),
+                lidar_pose=source_pose,
+            )
+            if self.include_history_images:
+                image_files = {}
+                lidar2img = {}
+                ego2img = {}
+                for camera in self.SENSOR_TYPES:
+                    camera_info = previous_frame['data'][camera]
+                    image_files[camera] = os.path.join(
+                        self.data_root, camera_info['filename']
+                    )
+                    img2global = get_img2global(
+                        camera_info['calib'], camera_info['pose']
+                    )
+                    lidar2img[camera] = np.linalg.inv(img2global) @ target_pose
+                    ego2img[camera] = np.linalg.inv(img2global) @ ego2global
+                candidate.update(
+                    img_files=image_files,
+                    lidar2img=lidar2img,
+                    ego2img=ego2img,
                 )
-                img2global = get_img2global(cam_info['calib'], cam_info['pose'])
-                lidar2img[cam_type] = np.linalg.inv(img2global) @ target_pose
-                ego2img_dict[cam_type] = np.linalg.inv(img2global) @ ego2global
-
-            history.append({
-                'points': transformed,
-                'pts_filename': os.path.abspath(
-                    os.path.join(self.data_root, lidar_info['filename'])
-                ),
-                'lidar_pose': source_pose,
-                'img_files': img_files,
-                'lidar2img': lidar2img,
-                'ego2img': ego2img_dict,
-            })
-
+            history.append(candidate)
             if len(history) >= self.max_window:
                 break
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-dataset_analysis.py — NuScenes 数据集场景融合熵统计脚本 (多进程版本)
+dataset_analysis_optimize.py — NuScenes 数据集场景融合熵统计脚本 (精确优化版)
 
 从融合 0 帧逐步统计到融合 16 帧的:
   - 平均场景熵 (基于体素点分布的香农熵)
@@ -55,6 +55,10 @@ GAIN_EPS = 0.0
 # 批量计算 DECI 时的最大体素批大小，限制临时矩阵的峰值内存。
 DECI_BATCH_SIZE = 65536
 
+# DECI 只可能取 0~3 维。常数表在模块加载时计算一次，避免每个批次
+# 重复执行幂运算；这只是缓存原公式中的精确常数，不改变数学定义。
+DECI_CONSTANTS = np.power(2.0 * np.pi * np.e, np.arange(4))
+
 
 def create_voxel_generator():
     """创建与现有代码参数一致的体素生成器"""
@@ -68,10 +72,18 @@ def create_voxel_generator():
 
 
 def compute_deci_values_batched(voxels, num_points, batch_size=DECI_BATCH_SIZE):
-    """批量计算每个非空体素的 DECI，公式与 compute_voxel_deci 一致。"""
-    voxel_count = len(num_points)
+    """批量计算每个非空体素的 DECI，公式与逐体素版本严格一致。
+
+    优化仅减少无效计算和临时数组：单点体素的 DECI 按定义恒为 0，
+    因此不送入协方差和特征值分解；中心化则复用点坐标缓冲区。
+    """
+    counts_all = np.asarray(num_points, dtype=np.int64)
+    voxel_count = counts_all.size
     deci_values = np.zeros(voxel_count, dtype=np.float64)
     if voxel_count == 0:
+        return deci_values
+
+    if not np.any(counts_all > 1):
         return deci_values
 
     # 原实现 compute_voxel_deci() 使用标量 vsize=0.5。
@@ -79,22 +91,31 @@ def compute_deci_values_batched(voxels, num_points, batch_size=DECI_BATCH_SIZE):
     max_points = voxels.shape[1]
     point_indices = np.arange(max_points)[None, :]
 
+    # batch_size 仍表示输入体素批大小，确保优化版的峰值内存不会因
+    # “只按有效体素计数”而意外超过原版。
     for start in range(0, voxel_count, batch_size):
         end = min(start + batch_size, voxel_count)
-        counts = np.asarray(num_points[start:end], dtype=np.int64)
-        valid_voxels = counts > 1
-        if not np.any(valid_voxels):
+        selected_indices = (
+            start + np.flatnonzero(counts_all[start:end] > 1)
+        )
+        if selected_indices.size == 0:
             continue
+        counts = counts_all[selected_indices]
 
         # 保持输入点云 dtype，确保与原逐体素实现的数值精度一致。
-        points = np.asarray(voxels[start:end, :, :3]) / vsize
+        # 高级索引已经返回独立数组，原地归一化可避免再复制一份坐标。
+        points = np.asarray(voxels[selected_indices, :, :3])
+        points /= vsize
         mask = point_indices < counts[:, None]
         points *= mask[..., None]
-        means = points.sum(axis=1) / np.maximum(counts[:, None], 1)
+        means = points.sum(axis=1) / counts[:, None]
+
+        # 只为有效体素生成中心化数组；相比原实现仍按单点体素占比同比
+        # 降低峰值内存，同时保留 NumPy 原表达式的求值和舍入路径。
         centered = (points - means[:, None, :]) * mask[..., None]
         covariances = np.einsum(
             'bpi,bpj->bij', centered, centered, optimize=True
-        ) / np.maximum(counts - 1, 1)[:, None, None]
+        ) / (counts - 1)[:, None, None]
 
         eigenvalues = np.linalg.eigvalsh(covariances)
         eigenvalues = np.sort(np.abs(eigenvalues), axis=1)[:, ::-1]
@@ -106,7 +127,7 @@ def compute_deci_values_batched(voxels, num_points, batch_size=DECI_BATCH_SIZE):
         ranks = np.minimum(ranks, np.minimum(counts - 1, 3))
         normalized = eigenvalues / eigenvalues.sum(axis=1, keepdims=True)
 
-        products = np.ones(end - start, dtype=np.float64)
+        products = np.ones(selected_indices.size, dtype=np.float64)
         for rank in (1, 2, 3):
             selected = ranks == rank
             if np.any(selected):
@@ -114,12 +135,11 @@ def compute_deci_values_batched(voxels, num_points, batch_size=DECI_BATCH_SIZE):
                     normalized[selected, :rank], axis=1
                 )
 
-        constants = np.power(2.0 * np.pi * np.e, ranks)
-        entropy = 0.5 * np.log(constants * products + 1.0)
-        valid_entropy = valid_voxels & (ranks > 0) & (entropy > 0)
-        batch_deci = np.zeros(end - start, dtype=np.float64)
+        entropy = 0.5 * np.log(DECI_CONSTANTS[ranks] * products + 1.0)
+        valid_entropy = (ranks > 0) & (entropy > 0)
+        batch_deci = np.zeros(selected_indices.size, dtype=np.float64)
         batch_deci[valid_entropy] = 1.0 / entropy[valid_entropy]
-        deci_values[start:end] = batch_deci
+        deci_values[selected_indices] = batch_deci
 
     return deci_values
 
@@ -151,8 +171,14 @@ def compute_both_entropies(points, vg):
         else:
             counts = np.asarray(num_points, dtype=np.int64)
             total_points = int(counts.sum())
-            probabilities = counts.astype(np.float64) / total_points
-            H = float(-np.sum(probabilities * np.log(probabilities)))
+            # -sum(p*log(p)) 的严格恒等形式：
+            # log(N) - sum(n_i*log(n_i))/N。避免 probabilities 中间数组
+            # 以及对一次除法结果再取对数，不使用任何数学近似。
+            counts_float = counts.astype(np.float64)
+            H = float(
+                np.log(total_points)
+                - np.dot(counts_float, np.log(counts_float)) / total_points
+            )
 
             deci_values = compute_deci_values_batched(voxels, counts)
             weighted_sum = np.dot(deci_values, counts)

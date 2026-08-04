@@ -21,6 +21,21 @@ def pass_print(*args, **kwargs):
     pass
 
 
+def move_to_cuda(value):
+    """Recursively move model inputs, including DAOcc's ragged 3D data."""
+    if isinstance(value, torch.Tensor):
+        return value.cuda(non_blocking=True)
+    if isinstance(value, list):
+        return [move_to_cuda(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(move_to_cuda(item) for item in value)
+    if isinstance(value, dict):
+        return {key: move_to_cuda(item) for key, item in value.items()}
+    if hasattr(value, 'to') and value.__class__.__module__.startswith('mmdet3d.'):
+        return value.to(torch.cuda.current_device())
+    return value
+
+
 def get_occ3d_eval_mask_name(cfg):
     mask_name = cfg.get('occ3d_eval_mask', None)
     if mask_name is not None:
@@ -210,12 +225,12 @@ def main(local_rank, args):
     if cfg.dataset_name_flag == 'surroundocc':
         miou_metric = MeanIoU(
             list(range(1, 17)),
-            17, #17,
+            0,
             ['barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
             'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
             'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
             'vegetation'],
-            True, 17, filter_minmax=False)
+            True, 0, filter_minmax=False)
     elif cfg.dataset_name_flag == 'occ3d':
         miou_metric = MeanIoU(
             list(range(17)),
@@ -236,6 +251,8 @@ def main(local_rank, args):
         if hasattr(train_dataset_loader.sampler, 'set_epoch'):
             train_dataset_loader.sampler.set_epoch(epoch)
         loss_list = []
+        entropy_selected_history_sum = 0.0
+        entropy_selected_history_count = 0
         time.sleep(10)
         data_time_s = time.time()
         time_s = time.time()
@@ -243,9 +260,19 @@ def main(local_rank, args):
             if first_run:
                 i_iter = i_iter + last_iter
 
+            selected_history = data.get('num_lidar_history_frame')
+            if selected_history is not None:
+                if isinstance(selected_history, torch.Tensor):
+                    selected_history = selected_history.detach().cpu().tolist()
+                if not isinstance(selected_history, (list, tuple)):
+                    selected_history = [selected_history]
+                entropy_selected_history_sum += sum(selected_history)
+                entropy_selected_history_count += len(selected_history)
+
             for k in list(data.keys()):
-                if isinstance(data[k], torch.Tensor):
-                    data[k] = data[k].cuda()
+                if not (k == 'lidar_points' and
+                        cfg.get('keep_lidar_points_cpu', False)):
+                    data[k] = move_to_cuda(data[k])
             input_imgs = data.pop('img')            
             data_time_e = time.time()
 
@@ -273,7 +300,9 @@ def main(local_rank, args):
                 if (global_iter + 1) % grad_accumulation == 0:
                     scaler.unscale_(optimizer)
                     grad_norm = torch.nn.utils.clip_grad_norm_(my_model.parameters(), cfg.grad_max_norm)
-                    scaler.step(optimizer)
+                    # GradScaler must step the underlying torch Optimizer,
+                    # rather than MMEngine's OptimWrapper facade.
+                    scaler.step(optimizer.optimizer)
                     scaler.update()
                     optimizer.zero_grad()
 
@@ -282,6 +311,19 @@ def main(local_rank, args):
             time_e = time.time()
 
             global_iter += 1
+            selector_log_sum = entropy_selected_history_sum
+            selector_log_count = entropy_selected_history_count
+            if (i_iter % print_freq == 0 and
+                    entropy_selected_history_count > 0 and distributed):
+                selector_stats = torch.tensor(
+                    [selector_log_sum, selector_log_count],
+                    dtype=torch.float64,
+                    device=torch.cuda.current_device(),
+                )
+                dist.all_reduce(selector_stats, op=dist.ReduceOp.SUM)
+                selector_log_sum = selector_stats[0].item()
+                selector_log_count = int(selector_stats[1].item())
+
             if i_iter % print_freq == 0 and local_rank == 0:
                 #lr = max([p['lr'] for p in optimizer.param_groups])
                 lr = optimizer.param_groups[0]['lr']
@@ -289,12 +331,21 @@ def main(local_rank, args):
                     epoch, i_iter, len(train_dataset_loader), 
                     loss.item(), np.mean(loss_list), grad_norm, lr,
                     time_e - time_s, data_time_e - data_time_s))
+                if selector_log_count > 0:
+                    logger.info(
+                        '[EntropySelector] average selected history frames: '
+                        f'{selector_log_sum / selector_log_count:.2f} '
+                        f'(samples={selector_log_count})'
+                    )
                 detailed_loss = []
                 for loss_name, loss_value in loss_dict.items():
                     detailed_loss.append(f'{loss_name}: {loss_value:.5f}')
                 detailed_loss = ', '.join(detailed_loss)
                 logger.info(detailed_loss)
                 loss_list = []
+            if i_iter % print_freq == 0:
+                entropy_selected_history_sum = 0.0
+                entropy_selected_history_count = 0
             data_time_s = time.time()
             time_s = time.time()
 
@@ -341,8 +392,9 @@ def main(local_rank, args):
         with torch.no_grad():
             for i_iter_val, data in enumerate(val_dataset_loader):
                 for k in list(data.keys()):
-                    if isinstance(data[k], torch.Tensor):
-                        data[k] = data[k].cuda()
+                    if not (k == 'lidar_points' and
+                            cfg.get('keep_lidar_points_cpu', False)):
+                        data[k] = move_to_cuda(data[k])
                 input_imgs = data.pop('img')
                 
                 with torch.cuda.amp.autocast(amp):

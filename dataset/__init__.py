@@ -4,6 +4,7 @@ OPENOCC_DATAWRAPPER = Registry('openocc_datawrapper')
 OPENOCC_TRANSFORMS = Registry('openocc_transforms')
 
 from .dataset import NuScenesDataset
+from .daocc_surroundocc import DAOccSurroundOccDataset
 from .dataset_flow import NuScenesFlowDataset, SceneStream
 from .transform_3d import *
 from .sampler import CustomDistributedSampler
@@ -11,6 +12,28 @@ from .utils import custom_collate_fn_temporal
 
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.dataloader import DataLoader
+
+
+def _limit_worker_threads(_worker_id):
+    """避免每个 DataLoader worker 再创建一组 BLAS/OpenMP 线程。"""
+    import torch
+    from threadpoolctl import threadpool_limits
+
+    torch.set_num_threads(1)
+    threadpool_limits(limits=1)
+
+
+def _worker_options(loader_config):
+    """仅在启用 worker 时传递 PyTorch DataLoader 的预取选项。"""
+    if loader_config["num_workers"] <= 0:
+        return {}
+    options = dict(
+        persistent_workers=loader_config.get("persistent_workers", False),
+        prefetch_factor=loader_config.get("prefetch_factor", 2),
+    )
+    if loader_config.get("limit_worker_threads", False):
+        options["worker_init_fn"] = _limit_worker_threads
+    return options
 
 
 def get_dataloader(
@@ -43,7 +66,8 @@ def get_dataloader(
             shuffle=False,
             sampler=val_sampler,
             num_workers=val_loader["num_workers"],
-            pin_memory=True)
+            pin_memory=True,
+            **_worker_options(val_loader))
 
         return None, val_dataset_loader
 
@@ -67,7 +91,8 @@ def get_dataloader(
         shuffle=False if dist else train_loader["shuffle"],
         sampler=train_sampler,
         num_workers=train_loader["num_workers"],
-        pin_memory=True)
+        pin_memory=True,
+        **_worker_options(train_loader))
     val_dataset_loader = DataLoader(
         dataset=val_wrapper,
         batch_size=val_loader["batch_size"],
@@ -75,7 +100,8 @@ def get_dataloader(
         shuffle=False,
         sampler=val_sampler,
         num_workers=val_loader["num_workers"],
-        pin_memory=True)
+        pin_memory=True,
+        **_worker_options(val_loader))
 
     return train_dataset_loader, val_dataset_loader
 

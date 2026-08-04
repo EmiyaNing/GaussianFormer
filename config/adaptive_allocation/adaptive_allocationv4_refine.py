@@ -70,7 +70,7 @@ num_decoder = 2
 num_single_frame_decoder = 1
 num_densify_frame_decoder= 1
 pc_range = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
-scale_range = [0.08, 1.8]
+scale_range = [0.08, 0.64]
 xyz_coordinate = 'cartesian'
 phi_activation = 'sigmoid'
 include_opa = True
@@ -153,6 +153,7 @@ model = dict(
             pc_range = pc_range,
             scale_range = scale_range,
             unit_xyz=[4.0, 4.0, 1.0],
+            allocation_ratio=0.8,
         ),
         spconv_layer=dict(
             _delete_=True,
@@ -172,6 +173,7 @@ model = dict(
             "ffn",
             "norm",
             "refine",
+            "densify",
         ] * num_single_frame_decoder + [
             "spconv",
             "norm",
@@ -179,7 +181,6 @@ model = dict(
             "ffn",
             "norm",
             "refine",
-            "densify",
         ],
     ),
     head=dict(
@@ -201,3 +202,12 @@ model = dict(
             grid_size=0.5),
     )
 )
+
+# DDP dummy branches ensure all parameters appear in the computational graph
+# on every rank, even when a branch has no selected gaussians.
+# _set_static_graph resolves the conflict between find_unused_parameters=True
+# and gradient checkpointing (with_cp=True on ResNet backbone).
+# The dummy branches guarantee the set of used parameters is stable,
+# making this compatible with static_graph.
+find_unused_parameters = True
+ddp_static_graph = True
