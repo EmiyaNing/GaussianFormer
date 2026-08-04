@@ -1,3 +1,5 @@
 from .base_segmentor import CustomBaseSegmentor
 from .bev_segmentor import BEVSegmentor
 from .opus_segmentor import OPUSSegmentor
+from .sparseworld_traj_segmentor import SparseWorldTrajSegmentor
+from .sparseworld_strict_segmentor import SparseWorldStrictSegmentor

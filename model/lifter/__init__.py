@@ -1,6 +1,7 @@
 from .base_lifter import BaseLifter
 from .gaussian_lifter import GaussianLifter
 from .opus_query_lifter import OPUSQueryLifter
+from .sparseworld_strict_query_lifter import SparseWorldStrictQueryLifter
 from .semantic_gaussian_template_lifter import SemanticGaussianTemplateLifter
 from .multimodal_opus_lifter import MultiModalOPUSLifter
 from .voxel_gaussian_lifter import GaussianVoxelLearnear

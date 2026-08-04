@@ -266,6 +266,14 @@ def main(local_rank, args):
 
     while epoch < max_num_epochs:
         my_model.train()
+        # Opt in explicitly: existing OPUSv1 training must retain its exact
+        # pre-SparseWorld loop even if a future model happens to expose a
+        # method named ``set_epoch``.
+        if cfg.get('enable_model_set_epoch', False):
+            if not hasattr(raw_model, 'set_epoch'):
+                raise AttributeError(
+                    'enable_model_set_epoch=True requires model.set_epoch(epoch)')
+            raw_model.set_epoch(epoch)
         os.environ['eval'] = 'false'
         if hasattr(train_dataset_loader.sampler, 'set_epoch'):
             train_dataset_loader.sampler.set_epoch(epoch)
@@ -431,9 +439,25 @@ def main(local_rank, args):
                             loss_input_key: result_dict[loss_input_val]})
                     loss, loss_dict = loss_func(loss_input)
                     for loss_name, loss_value in loss_dict.items():
-                        if np.isfinite(loss_value):
+                        # Loss details are CUDA scalar tensors during eval.
+                        # NumPy attempts an implicit ``Tensor.numpy()`` here,
+                        # which is invalid for CUDA storage.  Keep the
+                        # finiteness check in PyTorch and accumulate detached
+                        # host scalars only; this is logging/aggregation logic
+                        # and does not alter any model or loss computation.
+                        if isinstance(loss_value, torch.Tensor):
+                            if loss_value.numel() != 1:
+                                raise ValueError(
+                                    f'eval loss detail {loss_name!r} must be a '
+                                    f'scalar tensor, got {tuple(loss_value.shape)}')
+                            is_finite = torch.isfinite(loss_value).all().item()
+                            scalar_value = loss_value.detach().item()
+                        else:
+                            is_finite = np.isfinite(loss_value)
+                            scalar_value = loss_value
+                        if is_finite:
                             val_detail_sum[loss_name] = (
-                                val_detail_sum.get(loss_name, 0.0) + loss_value
+                                val_detail_sum.get(loss_name, 0.0) + scalar_value
                             )
                             val_detail_count[loss_name] = (
                                 val_detail_count.get(loss_name, 0) + 1

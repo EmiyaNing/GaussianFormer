@@ -6,6 +6,7 @@ OPENOCC_TRANSFORMS = Registry('openocc_transforms')
 from .dataset import NuScenesDataset
 from .opus_target import PrepareOPUSTarget
 from .dataset_flow import NuScenesFlowDataset, SceneStream
+from .sparseworld_trajectory import NuScenesSparseWorldTrajectoryDataset, LoadSparseWorldFutureOccupancy
 from .transform_3d import *
 from .sampler import CustomDistributedSampler
 from .utils import custom_collate_fn_temporal

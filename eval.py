@@ -52,6 +52,82 @@ def get_occ_grid_shape(cfg, result_dict):
         return tuple(result_dict['final_occ_grid'].shape[1:])
     return tuple(cfg.get('grid_shape', (200, 200, 16)))
 
+
+def build_sparseworld_future_metrics(cfg):
+    """Create one independent metric accumulator for each requested horizon.
+
+    This function is called only when a config explicitly declares
+    ``sparseworld_future_eval.enabled=True``.  Generic OPUS/Gaussian configs
+    therefore retain their historical evaluation behavior unchanged.
+    """
+    options = cfg.get('sparseworld_future_eval', None)
+    if not options or not options.get('enabled', False):
+        return None, None
+    if cfg.dataset_name_flag != 'occ3d':
+        raise ValueError('SparseWorld future occupancy evaluation currently requires Occ3D metrics')
+    horizons = tuple(options.get('horizons', (1, 2, 3, 4, 5, 6)))
+    if not horizons or min(horizons) < 1 or len(set(horizons)) != len(horizons):
+        raise ValueError('sparseworld_future_eval.horizons must be unique positive one-based indices')
+    from misc.sparseworld_eval import SparseWorldHorizonMetric
+    mask_name = get_occ3d_eval_mask_name(cfg)
+    metrics = {
+        horizon: SparseWorldHorizonMetric(
+            num_classes=18, use_lidar_mask=mask_name == 'lidar',
+            use_image_mask=mask_name == 'camera', free_label=17,
+            report_occ_iou=options.get('report_occ_iou', True))
+        for horizon in horizons
+    }
+    return options, metrics
+
+
+def update_sparseworld_future_metrics(metrics, result_dict, data, raw_model, grid_shape):
+    """Rasterize and score each requested future horizon independently.
+
+    Future predictions are expressed in the current ego coordinate system,
+    while future Occ3D grids are native to their own future ego frame.  The
+    function therefore maps predictions by the inverse of
+    ``future_ego_to_current`` before applying the unchanged OPUS rasterizer.
+    """
+    from misc.sparseworld_eval import points_current_to_future
+    required = ('future_predictions', 'future_logits')
+    if any(key not in result_dict for key in required):
+        raise KeyError(f'SparseWorld future evaluation requires result keys {required}')
+    required = ('future_occ_labels', 'future_occ_cam_masks', 'future_occ_lidar_masks',
+                'future_ego_to_current')
+    if any(key not in data for key in required):
+        raise KeyError(f'SparseWorld future evaluation requires data keys {required}')
+    if not hasattr(raw_model, 'head') or not hasattr(raw_model, 'num_refines'):
+        raise TypeError('SparseWorld future evaluation requires a SparseWorldTrajSegmentor-like model')
+
+    predictions, logits = result_dict['future_predictions'], result_dict['future_logits']
+    available_horizon = min(len(predictions), len(logits), data['future_occ_labels'].shape[1])
+    rasterizer = raw_model.head.rasterizer
+    for horizon, metric in metrics.items():
+        step = horizon - 1
+        if step >= available_horizon:
+            raise ValueError(
+                f'configured future horizon t+{horizon} is unavailable; model/data provide '
+                f'{available_horizon} future steps')
+        if predictions[step].shape[:2] != logits[step].shape[:2]:
+            raise ValueError(f'future point/logit shape mismatch at t+{horizon}')
+        for batch_index in range(predictions[step].shape[0]):
+            # SparseWorldStrict follows the upstream decoder/evaluation
+            # contract: its recurrence directly produces native future-ego
+            # coordinates. Legacy SparseWorldTrajSegmentor retains the local
+            # current-ego convention and is transformed as before.
+            future_points = predictions[step][batch_index]
+            if result_dict.get('future_prediction_coordinate') != 'native_future':
+                future_points = points_current_to_future(
+                    future_points, data['future_ego_to_current'][batch_index, step])
+            predicted_grid = rasterizer(
+                future_points.unsqueeze(0), logits[step][batch_index].unsqueeze(0),
+                group_size=raw_model.num_refines)[0]
+            metric.add_batch(
+                predicted_grid.reshape(*grid_shape).cpu().numpy(),
+                data['future_occ_labels'][batch_index, step].reshape(*grid_shape).cpu().numpy(),
+                data['future_occ_lidar_masks'][batch_index, step].reshape(*grid_shape).cpu().numpy(),
+                data['future_occ_cam_masks'][batch_index, step].reshape(*grid_shape).cpu().numpy())
+
 def main(local_rank, args):
     # global settings
     set_random_seed(args.seed)
@@ -177,6 +253,7 @@ def main(local_rank, args):
     else:
         print("Not emplement this dataset:", cfg.dataset_name_flag)
         exit(0)
+    future_eval_options, future_metrics = build_sparseworld_future_metrics(cfg)
     
 
     my_model.eval()
@@ -208,6 +285,13 @@ def main(local_rank, args):
                         miou_metric.add_batch(
                             pred_occ, gt_occ, occ_lidar_mask, occ_cam_mask)
                     # breakpoint()
+            # Future metrics are strictly opt-in and deliberately separate
+            # from the current-frame accumulator above.  This prevents any
+            # future horizon from changing historical non-SparseWorld scores.
+            if future_metrics is not None:
+                update_sparseworld_future_metrics(
+                    future_metrics, result_dict, data, raw_model,
+                    get_occ_grid_shape(cfg, result_dict))
             
             if i_iter_val % print_freq == 0 and local_rank == 0:
                 logger.info('[EVAL] Iter %5d'%(i_iter_val))
@@ -219,6 +303,16 @@ def main(local_rank, args):
     elif cfg.dataset_name_flag == 'occ3d':
         eval_results = miou_metric.count_miou_metric()
         logger.info(eval_results)
+
+    if future_metrics is not None:
+        # Unlike the legacy current-frame evaluator, future metrics are
+        # reduced explicitly so each t+k value is valid under multi-GPU eval.
+        metric_device = torch.device('cuda', torch.cuda.current_device())
+        for metric in future_metrics.values():
+            metric.synchronize(metric_device)
+        if local_rank == 0:
+            for horizon, metric in future_metrics.items():
+                logger.info('[SparseWorld Future t+%d] %s', horizon, metric.results())
 
     
     if writer is not None:

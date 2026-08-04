@@ -8,3 +8,5 @@ from .gaussian_point_occupancy_loss import GaussianPointOccupancyLoss
 from .gaussian_occupancy_loss import GaussianOccupancyLoss
 from .gaussian_center_chamfer_loss import GaussianCenterChamferLoss
 from .adaptive_allocation_v6_loss import AdaptiveAllocationV6Loss
+from .sparseworld_trajectory_loss import SparseWorldTrajectoryLoss
+from .sparseworld_strict_loss import SparseWorldStrictLoss
