@@ -12,6 +12,7 @@ from mmengine.utils import symlink
 from mmseg.models import build_segmentor
 from timm.scheduler import CosineLRScheduler, MultiStepLRScheduler
 from one_cycle_lr import OneCycleLR
+from opus_v2_lr import OPUSV2WarmupCosineLR
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -77,6 +78,23 @@ def loss_value_to_float(value):
     return float(value)
 
 
+def training_checkpoint_meta(cfg):
+    """Tag only native OPUSv2 checkpoints; other models remain unchanged."""
+    if cfg.get('checkpoint_mapping') == 'official_opusv2':
+        return {'checkpoint_format': 'gaussianformer_opusv2_training_v1'}
+    return None
+
+
+def eval_amp_enabled(cfg, train_amp):
+    """Keep AMP training while allowing spconv models to evaluate in FP32."""
+    return bool(train_amp and not cfg.get('force_fp32_eval', False))
+
+
+def native_amp_optimizer(optimizer):
+    """Return the torch optimizer expected by GradScaler."""
+    return getattr(optimizer, 'optimizer', optimizer)
+
+
 def main(local_rank, args):
     # global settings
     set_random_seed(args.seed)
@@ -109,6 +127,13 @@ def main(local_rank, args):
     else:
         distributed = False
         world_size = 1
+
+    # Official OPUS configs specify a global batch size.  Keep this opt-in so
+    # every existing model retains its current per-GPU loader semantics.
+    if cfg.get('global_batch_size', None) is not None:
+        if cfg.global_batch_size % world_size:
+            raise ValueError('global_batch_size must be divisible by world_size')
+        cfg.train_loader.batch_size = cfg.global_batch_size // world_size
     
     if local_rank == 0:
         os.makedirs(args.work_dir, exist_ok=True)
@@ -165,7 +190,14 @@ def main(local_rank, args):
     optimizer = build_optim_wrapper(my_model, cfg.optimizer)
     loss_func = OPENOCC_LOSS.build(cfg.loss).cuda()
     max_num_epochs = cfg.max_epochs
-    if cfg.get('multisteplr', False):
+    if cfg.get('lr_scheduler_type', None) == 'official_opusv2':
+        scheduler = OPUSV2WarmupCosineLR(
+            optimizer.optimizer,
+            total_steps=len(train_dataset_loader) * max_num_epochs,
+            warmup_iters=cfg.get('warmup_iters', 500),
+            warmup_ratio=cfg.get('warmup_ratio', 1. / 3.),
+            min_lr_ratio=cfg.get('min_lr_ratio', 1e-3))
+    elif cfg.get('multisteplr', False):
         scheduler = MultiStepLRScheduler(
             optimizer,
             **cfg.multisteplr_config
@@ -213,9 +245,12 @@ def main(local_rank, args):
     if cfg.resume_from and osp.exists(cfg.resume_from):
         map_location = 'cpu'
         ckpt = torch.load(cfg.resume_from, map_location=map_location)
-        print(raw_model.load_state_dict(ckpt['state_dict'], strict=False))
+        print(raw_model.load_state_dict(
+            ckpt['state_dict'], strict=cfg.get('strict_train_resume', False)))
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
+        if amp and 'scaler' in ckpt:
+            scaler.load_state_dict(ckpt['scaler'])
         epoch = ckpt['epoch']
         global_iter = ckpt['global_iter']
         last_iter = ckpt['last_iter'] if 'last_iter' in ckpt else 0
@@ -228,6 +263,11 @@ def main(local_rank, args):
             state_dict = ckpt['state_dict']
         else:
             state_dict = ckpt
+        load_only_prefixes = cfg.get('load_only_prefixes', None)
+        if load_only_prefixes:
+            state_dict = {
+                key: value for key, value in state_dict.items()
+                if any(key.startswith(prefix) for prefix in load_only_prefixes)}
         try:
             print(raw_model.load_state_dict(state_dict, strict=False))
         except:
@@ -271,16 +311,19 @@ def main(local_rank, args):
             train_dataset_loader.sampler.set_epoch(epoch)
         loss_list = []
         loss_component_history = {}
-        time.sleep(10)
+        epoch_start_sleep = cfg.get('epoch_start_sleep', 10)
+        if epoch_start_sleep > 0:
+            time.sleep(epoch_start_sleep)
         data_time_s = time.time()
         time_s = time.time()
         for i_iter, data in enumerate(train_dataset_loader):
             if first_run:
                 i_iter = i_iter + last_iter
 
+            non_blocking_transfer = cfg.get('non_blocking_transfer', False)
             for k in list(data.keys()):
                 if isinstance(data[k], torch.Tensor):
-                    data[k] = data[k].cuda()
+                    data[k] = data[k].cuda(non_blocking=non_blocking_transfer)
             input_imgs = data.pop('img')            
             data_time_e = time.time()
 
@@ -318,7 +361,13 @@ def main(local_rank, args):
             else:
                 scaler.scale(loss).backward()
                 if (global_iter + 1) % grad_accumulation == 0:
-                    scaler.unscale_(optimizer)
+                    # GradScaler requires the native torch optimizer.  Passing
+                    # MMEngine's OptimWrapper exposes its synthetic
+                    # base_param_settings as an extra (duplicated) param group,
+                    # so one real gradient is unscaled twice and found-inf
+                    # bookkeeping no longer matches the AdamW step.
+                    amp_optimizer = native_amp_optimizer(optimizer)
+                    scaler.unscale_(amp_optimizer)
                     if cfg.get('fail_on_nonfinite_grad', False):
                         bad_gradients = find_nonfinite_gradients(my_model)
                         if bad_gradients:
@@ -328,7 +377,7 @@ def main(local_rank, args):
                     grad_norm = torch.nn.utils.clip_grad_norm_(
                         my_model.parameters(), cfg.grad_max_norm,
                         error_if_nonfinite=cfg.get('fail_on_nonfinite_grad', False))
-                    scaler.step(optimizer)
+                    scaler.step(amp_optimizer)
                     scaler.update()
                     optimizer.zero_grad()
 
@@ -380,6 +429,11 @@ def main(local_rank, args):
                         'global_iter': global_iter,
                         'last_iter': i_iter + 1,
                     }
+                    if amp:
+                        dict_to_save['scaler'] = scaler.state_dict()
+                    checkpoint_meta = training_checkpoint_meta(cfg)
+                    if checkpoint_meta is not None:
+                        dict_to_save['meta'] = checkpoint_meta
                     save_file_name = os.path.join(os.path.abspath(args.work_dir), 'iter.pth')
                     torch.save(dict_to_save, save_file_name)
                     dst_file = osp.join(args.work_dir, 'latest.pth')
@@ -395,6 +449,11 @@ def main(local_rank, args):
                 'epoch': epoch + 1,
                 'global_iter': global_iter,
             }
+            if amp:
+                dict_to_save['scaler'] = scaler.state_dict()
+            checkpoint_meta = training_checkpoint_meta(cfg)
+            if checkpoint_meta is not None:
+                dict_to_save['meta'] = checkpoint_meta
             save_file_name = os.path.join(os.path.abspath(args.work_dir), f'epoch_{epoch+1}.pth')
             torch.save(dict_to_save, save_file_name)
             dst_file = osp.join(args.work_dir, 'latest.pth')
@@ -416,10 +475,11 @@ def main(local_rank, args):
             for i_iter_val, data in enumerate(val_dataset_loader):
                 for k in list(data.keys()):
                     if isinstance(data[k], torch.Tensor):
-                        data[k] = data[k].cuda()
+                        data[k] = data[k].cuda(
+                            non_blocking=cfg.get('non_blocking_transfer', False))
                 input_imgs = data.pop('img')
                 
-                with torch.cuda.amp.autocast(amp):
+                with torch.cuda.amp.autocast(eval_amp_enabled(cfg, amp)):
                     result_dict = my_model(imgs=input_imgs, metas=data)
 
                     loss_input = {

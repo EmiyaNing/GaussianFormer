@@ -52,6 +52,32 @@ def get_occ_grid_shape(cfg, result_dict):
         return tuple(result_dict['final_occ_grid'].shape[1:])
     return tuple(cfg.get('grid_shape', (200, 200, 16)))
 
+
+def validate_strict_checkpoint_metadata(cfg, checkpoint):
+    """Accept mapped official weights or native local OPUSv2 train states.
+
+    Older native ``iter.pth`` files predate the explicit format marker.  They
+    are identified by the complete resumable-training payload; the subsequent
+    strict state-dict load remains the authoritative architecture check.
+    """
+    if cfg.get('checkpoint_mapping') != 'official_opusv2':
+        return
+    meta = checkpoint.get('meta', {}) if isinstance(checkpoint, dict) else {}
+    if meta.get('checkpoint_format') == 'gaussianformer_opusv2_training_v1':
+        return
+    legacy_native_keys = {
+        'state_dict', 'optimizer', 'scheduler', 'epoch', 'global_iter'}
+    if isinstance(checkpoint, dict) and legacy_native_keys.issubset(checkpoint):
+        return
+    required = ('opusv2_mapping_version', 'opusv2_source_sha256')
+    missing = [key for key in required if not meta.get(key)]
+    if missing:
+        raise RuntimeError(
+            'Official OPUSv2 evaluation requires either a checkpoint produced '
+            'by tools/convert_opusv2_checkpoint.py or a native resumable '
+            'GaussianFormer OPUSv2 training checkpoint; missing metadata: '
+            + ', '.join(missing))
+
 def main(local_rank, args):
     # global settings
     set_random_seed(args.seed)
@@ -137,9 +163,12 @@ def main(local_rank, args):
     logger.info('resume from: ' + cfg.resume_from)
     logger.info('work dir: ' + args.work_dir)
 
+    strict_checkpoint = cfg.get('strict_checkpoint', False)
     if cfg.resume_from and osp.exists(cfg.resume_from):
         map_location = 'cpu'
         ckpt = torch.load(cfg.resume_from, map_location=map_location)
+        if strict_checkpoint:
+            validate_strict_checkpoint_metadata(cfg, ckpt)
         raw_model.load_state_dict(ckpt.get("state_dict", ckpt), strict=True)
         print(f'successfully resumed.')
     elif cfg.load_from:
@@ -148,12 +177,17 @@ def main(local_rank, args):
             state_dict = ckpt['state_dict']
         else:
             state_dict = ckpt
-        try:
-            print(raw_model.load_state_dict(state_dict, strict=False))
-        except:
-            from misc.checkpoint_util import refine_load_from_sd
-            print(raw_model.load_state_dict(
-                refine_load_from_sd(state_dict), strict=False))
+        if strict_checkpoint:
+            validate_strict_checkpoint_metadata(cfg, ckpt)
+            raw_model.load_state_dict(state_dict, strict=True)
+            print('successfully loaded strict checkpoint.')
+        else:
+            try:
+                print(raw_model.load_state_dict(state_dict, strict=False))
+            except:
+                from misc.checkpoint_util import refine_load_from_sd
+                print(raw_model.load_state_dict(
+                    refine_load_from_sd(state_dict), strict=False))
         
     print_freq = cfg.print_freq
     if cfg.dataset_name_flag == 'surroundocc':

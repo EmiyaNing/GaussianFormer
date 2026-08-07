@@ -4,3 +4,4 @@ from .opus_head import OPUSHead
 from .opus_gaussian_residual_head import OPUSGaussianResidualHead
 from .opus_semantic_gaussian_localagg_cuda_head import OPUSSemanticGaussianLocalAggCUDAHead
 from .gaussian_opus_head import GaussianOPUSHead
+from .official_opus_v2_head import OfficialOPUSV2Head

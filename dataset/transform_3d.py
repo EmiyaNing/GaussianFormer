@@ -372,8 +372,9 @@ class LoadMultiViewImageHistory(object):
     """
 
     def __init__(self, num_history, num_cams=6, color_type='unchanged', to_float32=True,
-                 pad_history=False):
+                 pad_history=False, num_future=0):
         self.num_history = num_history
+        self.num_future = num_future
         self.num_cams = num_cams
         self.color_type = color_type
         self.to_float32 = to_float32
@@ -391,6 +392,12 @@ class LoadMultiViewImageHistory(object):
         ctx = results.get('history_context', None)
 
         num_history_frame = 0
+        num_future_frame = 0
+        current_imgs = list(results['img'][:self.num_cams])
+        current_lidar2img = list(results['lidar2img'][:self.num_cams])
+        current_ego2img = list(results['ego2img'][:self.num_cams])
+        previous_frames = []
+        future_frames = []
         if ctx is not None and self.num_history > 0:
             scene_infos = ctx['scene_infos']
             scene_token = ctx['scene_token']
@@ -403,24 +410,34 @@ class LoadMultiViewImageHistory(object):
             for prev_idx in range(frame_index - 1, -1, -1):
                 prev_info = scene_infos[scene_token][prev_idx]
 
+                # OPUS evaluation uses historical nuScenes keyframes, not the
+                # denser camera sweeps stored between two keyframes.  The
+                # learned temporal mixing slots therefore correspond to
+                # roughly 0.5 s, 1.0 s, ..., rather than adjacent ~0.1 s
+                # camera samples.
+                if not prev_info.get('is_key_frame', False):
+                    continue
+
                 # Skip frame if any camera is missing
                 if not all(cam_type in prev_info.get('data', {}) for cam_type in sensor_types):
                     continue
 
+                frame = ([], [], [])
                 for ci, cam_type in enumerate(sensor_types):
                     fname = os.path.join(data_path, prev_info['data'][cam_type]['filename'])
                     img = mmcv.imread(fname, self.color_type)
                     if self.to_float32:
                         img = img.astype(np.float32)
-                    results['img'].append(img)
+                    frame[0].append(img)
 
                     img2global = get_img2global(
                         prev_info['data'][cam_type]['calib'],
                         prev_info['data'][cam_type]['pose'],
                     )
-                    results['lidar2img'].append(np.linalg.inv(img2global) @ lidar2global)
-                    results['ego2img'].append(np.linalg.inv(img2global) @ ego2global)
+                    frame[1].append(np.linalg.inv(img2global) @ lidar2global)
+                    frame[2].append(np.linalg.inv(img2global) @ ego2global)
 
+                previous_frames.append(frame)
                 num_history_frame += 1
                 if num_history_frame >= self.num_history:
                     break
@@ -428,24 +445,67 @@ class LoadMultiViewImageHistory(object):
         # The encoder consumes a fixed [T * 6] camera dimension.  Scene
         # starts have fewer real sweeps, so repeat the current frame instead
         # of producing ragged batches or silently dropping those samples.
+        if ctx is not None and self.num_future > 0:
+            scene_infos = ctx['scene_infos']
+            scene_token = ctx['scene_token']
+            frame_index = ctx['frame_index']
+            data_path = ctx['data_path']
+            sensor_types = ctx['sensor_types']
+            lidar2global = results['lidar_pose']
+            ego2global = results['ego_pose']
+            for next_idx in range(frame_index + 1, len(scene_infos[scene_token])):
+                next_info = scene_infos[scene_token][next_idx]
+                if not next_info.get('is_key_frame', False):
+                    continue
+                if not all(cam_type in next_info.get('data', {}) for cam_type in sensor_types):
+                    continue
+                frame = ([], [], [])
+                for cam_type in sensor_types:
+                    image = mmcv.imread(
+                        os.path.join(data_path, next_info['data'][cam_type]['filename']),
+                        self.color_type)
+                    if self.to_float32:
+                        image = image.astype(np.float32)
+                    frame[0].append(image)
+                    img2global = get_img2global(
+                        next_info['data'][cam_type]['calib'],
+                        next_info['data'][cam_type]['pose'])
+                    frame[1].append(np.linalg.inv(img2global) @ lidar2global)
+                    frame[2].append(np.linalg.inv(img2global) @ ego2global)
+                future_frames.append(frame)
+                num_future_frame += 1
+                if num_future_frame >= self.num_future:
+                    break
+
         if self.pad_history and num_history_frame < self.num_history:
-            current_imgs = list(results['img'][:self.num_cams])
-            current_lidar2img = list(results['lidar2img'][:self.num_cams])
-            current_ego2img = list(results['ego2img'][:self.num_cams])
+            pad = previous_frames[-1] if previous_frames else (
+                current_imgs, current_lidar2img, current_ego2img)
             for _ in range(self.num_history - num_history_frame):
-                results['img'].extend([image.copy() for image in current_imgs])
-                results['lidar2img'].extend([matrix.copy() for matrix in current_lidar2img])
-                results['ego2img'].extend([matrix.copy() for matrix in current_ego2img])
+                previous_frames.append(tuple([item.copy() for item in values] for values in pad))
+        if self.pad_history and num_future_frame < self.num_future:
+            pad = future_frames[-1] if future_frames else (
+                current_imgs, current_lidar2img, current_ego2img)
+            for _ in range(self.num_future - num_future_frame):
+                future_frames.append(tuple([item.copy() for item in values] for values in pad))
+
+        # Official temporal order: far future -> near future -> current ->
+        # near history -> far history.
+        ordered = list(reversed(future_frames)) + [(
+            current_imgs, current_lidar2img, current_ego2img)] + previous_frames
+        results['img'] = [item for frame in ordered for item in frame[0]]
+        results['lidar2img'] = [item for frame in ordered for item in frame[1]]
+        results['ego2img'] = [item for frame in ordered for item in frame[2]]
 
         results['num_current_img'] = self.num_cams
         results['num_history_frame'] = num_history_frame
+        results['num_future_frame'] = num_future_frame
         results['img_shape'] = [x.shape[:2] for x in results['img']]
         return results
 
     def __repr__(self):
         repr_str = self.__class__.__name__
         repr_str += f'(num_history={self.num_history}, '
-        repr_str += f'num_cams={self.num_cams}, '
+        repr_str += f'num_cams={self.num_cams}, num_future={self.num_future}, '
         repr_str += f"color_type='{self.color_type}', "
         repr_str += f'to_float32={self.to_float32}, pad_history={self.pad_history})'
         return repr_str

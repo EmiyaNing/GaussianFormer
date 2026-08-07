@@ -14,6 +14,19 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.dataloader import DataLoader
 
 
+def _loader_runtime_options(loader):
+    """Optional throughput knobs; omitted configs retain prior behaviour."""
+    num_workers = loader["num_workers"]
+    options = dict(
+        num_workers=num_workers,
+        pin_memory=loader.get("pin_memory", True),
+        persistent_workers=(num_workers > 0 and
+                            loader.get("persistent_workers", False)))
+    if num_workers > 0 and loader.get("prefetch_factor", None) is not None:
+        options["prefetch_factor"] = loader["prefetch_factor"]
+    return options
+
+
 def get_dataloader(
     train_dataset_config, 
     val_dataset_config, 
@@ -43,8 +56,7 @@ def get_dataloader(
             collate_fn=custom_collate_fn_temporal,
             shuffle=False,
             sampler=val_sampler,
-            num_workers=val_loader["num_workers"],
-            pin_memory=True)
+            **_loader_runtime_options(val_loader))
 
         return None, val_dataset_loader
 
@@ -67,16 +79,14 @@ def get_dataloader(
         collate_fn=custom_collate_fn_temporal,
         shuffle=False if dist else train_loader["shuffle"],
         sampler=train_sampler,
-        num_workers=train_loader["num_workers"],
-        pin_memory=True)
+        **_loader_runtime_options(train_loader))
     val_dataset_loader = DataLoader(
         dataset=val_wrapper,
         batch_size=val_loader["batch_size"],
         collate_fn=custom_collate_fn_temporal,
         shuffle=False,
         sampler=val_sampler,
-        num_workers=val_loader["num_workers"],
-        pin_memory=True)
+        **_loader_runtime_options(val_loader))
 
     return train_dataset_loader, val_dataset_loader
 
