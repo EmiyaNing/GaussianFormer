@@ -73,6 +73,8 @@ def custom_collate_fn_temporal(instances):
             return_dict[k] = torch.stack([instance[k] for instance in instances])
         elif isinstance(v, (dict, str)):
             return_dict[k] = [instance[k] for instance in instances]
+        elif isinstance(v, (list, tuple)):
+            return_dict[k] = [instance[k] for instance in instances]
         elif isinstance(v, (int, float)):
             return_dict[k] = [instance[k] for instance in instances]
         elif v is None:
@@ -80,4 +82,3 @@ def custom_collate_fn_temporal(instances):
         else:
             raise NotImplementedError
     return return_dict
-

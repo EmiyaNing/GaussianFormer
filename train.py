@@ -78,14 +78,13 @@ def loss_value_to_float(value):
 
 
 def main(local_rank, args):
-    # global settings
-    set_random_seed(args.seed)
-    torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.benchmark = True
-
     # load config
     cfg = Config.fromfile(args.py_config)
     cfg.work_dir = args.work_dir
+    seed = cfg.get('seed', 42) if args.seed is None else args.seed
+    set_random_seed(seed)
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
 
     # init DDP
     if args.gpus > 1:
@@ -159,7 +158,8 @@ def main(local_rank, args):
         cfg.train_loader,
         cfg.val_loader,
         dist=distributed,
-        iter_resume=args.iter_resume)
+        iter_resume=args.iter_resume,
+        seed=cfg.get('dataloader_seed', None))
 
     # get optimizer, loss, scheduler
     optimizer = build_optim_wrapper(my_model, cfg.optimizer)
@@ -177,12 +177,16 @@ def main(local_rank, args):
             lr_range=(2e-5, 2e-4)
         )
     else:
+        # Most historical configs use the repository's 1e-6 warm-up start.
+        # A configuration can opt into a different start without changing the
+        # scheduler behavior of configurations that omit this field.
+        warmup_lr_init = cfg.get('warmup_lr_init', 1e-6)
         scheduler = CosineLRScheduler(
             optimizer,
             t_initial=len(train_dataset_loader) * max_num_epochs,
             lr_min=cfg.optimizer["optimizer"]["lr"] * cfg.get("min_lr_ratio", 0.1), #1e-6,
             warmup_t=cfg.get('warmup_iters', 500),
-            warmup_lr_init=1e-6,
+            warmup_lr_init=warmup_lr_init,
             t_in_epochs=False)
     amp = cfg.get('amp', False)
     if amp:
@@ -213,7 +217,8 @@ def main(local_rank, args):
     if cfg.resume_from and osp.exists(cfg.resume_from):
         map_location = 'cpu'
         ckpt = torch.load(cfg.resume_from, map_location=map_location)
-        print(raw_model.load_state_dict(ckpt['state_dict'], strict=False))
+        print(raw_model.load_state_dict(
+            ckpt['state_dict'], strict=cfg.get('strict_load', False)))
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
         epoch = ckpt['epoch']
@@ -222,18 +227,39 @@ def main(local_rank, args):
         if hasattr(train_dataset_loader.sampler, 'set_last_iter'):
             train_dataset_loader.sampler.set_last_iter(last_iter)
         print(f'successfully resumed from epoch {epoch}')
-    elif cfg.load_from:
-        ckpt = torch.load(cfg.load_from, map_location='cpu')
-        if 'state_dict' in ckpt:
-            state_dict = ckpt['state_dict']
+    elif cfg.get('train_load_from', cfg.get('load_from', None)):
+        initial_checkpoint = cfg.get('train_load_from', cfg.get('load_from'))
+        if cfg.get('sparse_gaussian_warmstart', False):
+            from misc.sparseworld_compat_checkpoint import \
+                load_sparse_gaussian_world_warmstart
+            report = load_sparse_gaussian_world_warmstart(
+                raw_model, initial_checkpoint)
+            print('SparseGaussianWorld warm-start:', report)
         else:
-            state_dict = ckpt
-        try:
-            print(raw_model.load_state_dict(state_dict, strict=False))
-        except:
-            from misc.checkpoint_util import refine_load_from_sd
-            print(raw_model.load_state_dict(
-                refine_load_from_sd(state_dict), strict=False))
+            ckpt = torch.load(initial_checkpoint, map_location='cpu')
+            if 'state_dict' in ckpt:
+                state_dict = ckpt['state_dict']
+            else:
+                state_dict = ckpt
+            revise_keys = cfg.get('train_load_revise_keys', [])
+            if revise_keys:
+                revised = {}
+                for key, value in state_dict.items():
+                    target_key = key
+                    for source_prefix, target_prefix in revise_keys:
+                        if target_key.startswith(source_prefix):
+                            target_key = target_prefix + target_key[len(source_prefix):]
+                            break
+                    revised[target_key] = value
+                state_dict = revised
+            try:
+                print(raw_model.load_state_dict(
+                    state_dict, strict=cfg.get('train_load_strict',
+                                               cfg.get('strict_load', False))))
+            except:
+                from misc.checkpoint_util import refine_load_from_sd
+                print(raw_model.load_state_dict(
+                    refine_load_from_sd(state_dict), strict=False))
         
     # training
     print_freq = cfg.print_freq
@@ -266,13 +292,7 @@ def main(local_rank, args):
 
     while epoch < max_num_epochs:
         my_model.train()
-        # Opt in explicitly: existing OPUSv1 training must retain its exact
-        # pre-SparseWorld loop even if a future model happens to expose a
-        # method named ``set_epoch``.
-        if cfg.get('enable_model_set_epoch', False):
-            if not hasattr(raw_model, 'set_epoch'):
-                raise AttributeError(
-                    'enable_model_set_epoch=True requires model.set_epoch(epoch)')
+        if cfg.get('enable_model_set_epoch', False) and hasattr(raw_model, 'set_epoch'):
             raw_model.set_epoch(epoch)
         os.environ['eval'] = 'false'
         if hasattr(train_dataset_loader.sampler, 'set_epoch'):
@@ -285,6 +305,9 @@ def main(local_rank, args):
         for i_iter, data in enumerate(train_dataset_loader):
             if first_run:
                 i_iter = i_iter + last_iter
+
+            if cfg.get('scheduler_step_before_optimizer', False):
+                scheduler.step_update(global_iter)
 
             for k in list(data.keys()):
                 if isinstance(data[k], torch.Tensor):
@@ -352,7 +375,8 @@ def main(local_rank, args):
                     continue
                 if np.isfinite(scalar_value):
                     loss_component_history.setdefault(loss_name, []).append(scalar_value)
-            scheduler.step_update(global_iter)
+            if not cfg.get('scheduler_step_before_optimizer', False):
+                scheduler.step_update(global_iter)
             time_e = time.time()
 
             global_iter += 1
@@ -523,7 +547,7 @@ if __name__ == '__main__':
     parser.add_argument('--work-dir', type=str, default='./out/tpv_lidarseg')
     parser.add_argument('--resume-from', type=str, default='')
     parser.add_argument('--iter-resume', action='store_true', default=False)
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--gradient-accumulation', type=int, default=1)
     parser.add_argument('--dataset', type=str, default='nuscenes')
     args = parser.parse_args()

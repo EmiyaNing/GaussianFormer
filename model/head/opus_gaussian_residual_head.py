@@ -4,125 +4,15 @@ The Gaussian centres are exactly the final OPUS points.  This module therefore
 implements a sparse, normalized Gaussian message-passing layer on the final
 point set rather than a dense voxel renderer.
 """
-import torch
-import torch.nn.functional as F
-from torch import nn
 from mmengine.registry import MODELS
 
 from .opus_head import OPUSHead
-
-try:
-    from mmcv.ops import knn as mmcv_knn
-except (ImportError, ModuleNotFoundError):
-    mmcv_knn = None
+from .point_anchored_semantic_gaussian import PointAnchoredSemanticGaussian
 
 
-class _PointAnchoredGaussianResidual(nn.Module):
-    """Predict Gaussian attributes and aggregate residuals on a point KNN graph."""
-    def __init__(self, embed_dims, num_children, num_classes, pc_range, scale_range,
-                 initial_scale=.35, initial_opacity=.02, num_neighbors=8,
-                 include_self=True, query_chunk_size=256):
-        super().__init__()
-        self.num_children = num_children
-        self.num_neighbors = num_neighbors
-        self.include_self = include_self
-        self.query_chunk_size = query_chunk_size
-        self.register_buffer('pc_lower', torch.tensor(pc_range[:3], dtype=torch.float32))
-        self.register_buffer('pc_upper', torch.tensor(pc_range[3:], dtype=torch.float32))
-        self.register_buffer('scale_min', torch.tensor(scale_range[0], dtype=torch.float32))
-        self.register_buffer('scale_max', torch.tensor(scale_range[1], dtype=torch.float32))
-        self.slot_embedding = nn.Embedding(num_children, embed_dims)
-        self.position_encoder = nn.Sequential(nn.Linear(3, embed_dims), nn.ReLU(inplace=True),
-                                              nn.Linear(embed_dims, embed_dims))
-        self.trunk = nn.Sequential(nn.Linear(embed_dims, embed_dims), nn.ReLU(inplace=True),
-                                   nn.Linear(embed_dims, embed_dims // 2), nn.ReLU(inplace=True))
-        hidden_dims = embed_dims // 2
-        self.scale_head = nn.Linear(hidden_dims, 3)
-        self.opacity_head = nn.Linear(hidden_dims, 1)
-        self.residual_head = nn.Linear(hidden_dims, num_classes)
-        scale_prob = ((torch.tensor(initial_scale) - self.scale_min) /
-                      (self.scale_max - self.scale_min)).clamp(.001, .999)
-        nn.init.zeros_(self.scale_head.weight)
-        nn.init.constant_(self.scale_head.bias, torch.logit(scale_prob).mean().item())
-        nn.init.zeros_(self.opacity_head.weight)
-        nn.init.constant_(self.opacity_head.bias, torch.logit(torch.tensor(initial_opacity)).item())
-        # Zero residual makes the Gaussian-refined branch initially identical
-        # to the detached OPUS classifier, preserving a stable warm-up point.
-        nn.init.zeros_(self.residual_head.weight)
-        nn.init.zeros_(self.residual_head.bias)
-
-    def _knn(self, points, neighbours):
-        """Return [N,K] neighbour indices without materialising an N×N matrix."""
-        count = points.shape[0]
-        neighbours = min(neighbours, count)
-        if points.is_cuda and mmcv_knn is not None:
-            # mmcv.knn returns [B,K,N_query], indices into its xyz argument.
-            return mmcv_knn(neighbours, points[None].contiguous(), points[None].contiguous())[0].transpose(0, 1)
-        indices = []
-        for start in range(0, count, self.query_chunk_size):
-            distance = torch.cdist(points[start:start + self.query_chunk_size].float(), points.float())
-            indices.append(distance.topk(neighbours, dim=-1, largest=False).indices)
-        return torch.cat(indices, dim=0)
-
-    def forward(self, token, points, valid_mask):
-        """Return Gaussian attributes and normalized local semantic residuals.
-
-        Args:
-            token: Final OPUS query tokens [B,Q,D].
-            points: Final OPUS child points in metres [B,Q,R,3].
-            valid_mask: Query validity [B,Q].
-
-        Returns:
-            dict with flattened point-aligned tensors: ``points [B,G,3]``,
-            ``scales [B,G,3]``, ``opacities [B,G,1]``, ``residual [B,G,C]``
-            and ``valid_mask [B,G]`` where G=Q*R.
-        """
-        batch, queries, children, _ = points.shape
-        if children != self.num_children:
-            raise ValueError('final OPUS child count does not match Gaussian slot count')
-        slot = self.slot_embedding.weight[None, None]
-        normalized = ((points - self.pc_lower.to(points)) /
-                      (self.pc_upper.to(points) - self.pc_lower.to(points))).clamp(0., 1.)
-        child_feature = token[:, :, None] + slot + self.position_encoder(normalized)
-        hidden = self.trunk(child_feature)
-        scales = self.scale_min.to(points) + (self.scale_max.to(points) - self.scale_min.to(points)) * \
-            torch.sigmoid(self.scale_head(hidden))
-        opacities = torch.sigmoid(self.opacity_head(hidden))
-        seed = self.residual_head(hidden)
-        flat_points = points.flatten(1, 2)
-        flat_scales = scales.flatten(1, 2)
-        flat_opacities = opacities.flatten(1, 2)
-        flat_seed = seed.flatten(1, 2)
-        flat_valid = valid_mask[:, :, None].expand(-1, -1, children).flatten(1)
-        residual = torch.zeros_like(flat_seed)
-        for batch_index in range(batch):
-            active = flat_valid[batch_index]
-            if not active.any():
-                continue
-            active_points = flat_points[batch_index, active]
-            active_scales = flat_scales[batch_index, active]
-            active_opacity = flat_opacities[batch_index, active]
-            active_seed = flat_seed[batch_index, active]
-            neighbour_count = self.num_neighbors if self.include_self else self.num_neighbors + 1
-            neighbour_index = self._knn(active_points, neighbour_count)
-            if not self.include_self and neighbour_index.shape[1] > 1:
-                # KNN includes the query itself at index zero for identical
-                # point/query sets; remove it to measure pure neighbourhood use.
-                neighbour_index = neighbour_index[:, 1:]
-            neighbour_points = active_points[neighbour_index]
-            neighbour_scales = active_scales[neighbour_index].clamp_min(1e-4)
-            neighbour_opacity = active_opacity[neighbour_index]
-            neighbour_seed = active_seed[neighbour_index]
-            delta = (active_points[:, None] - neighbour_points) / neighbour_scales
-            kernel = torch.exp(-.5 * delta.square().sum(dim=-1))
-            weights = neighbour_opacity.squeeze(-1) * kernel
-            # Normalization makes semantic magnitude invariant to local
-            # Gaussian count, unlike the existing unnormalized localagg head.
-            message = (weights[..., None] * neighbour_seed).sum(dim=1) / \
-                weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
-            residual[batch_index, active] = message
-        return dict(points=flat_points, scales=flat_scales, opacities=flat_opacities,
-                    residual=residual, valid_mask=flat_valid)
+# Backward-compatible private alias: existing imports and, more importantly,
+# the ``gaussian.*`` state namespace of OPUSGaussianResidualHead stay intact.
+_PointAnchoredGaussianResidual = PointAnchoredSemanticGaussian
 
 
 @MODELS.register_module()

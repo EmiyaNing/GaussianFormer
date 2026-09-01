@@ -400,7 +400,9 @@ class LoadMultiViewImageHistory(object):
             lidar2global = results['lidar_pose']
             ego2global = results['ego_pose']
 
-            for prev_idx in range(frame_index - 1, -1, -1):
+            history_indices = ctx.get(
+                'history_indices', range(frame_index - 1, -1, -1))
+            for prev_idx in history_indices:
                 prev_info = scene_infos[scene_token][prev_idx]
 
                 # Skip frame if any camera is missing
@@ -413,6 +415,7 @@ class LoadMultiViewImageHistory(object):
                     if self.to_float32:
                         img = img.astype(np.float32)
                     results['img'].append(img)
+                    results['img_filename'].append(fname)
 
                     img2global = get_img2global(
                         prev_info['data'][cam_type]['calib'],

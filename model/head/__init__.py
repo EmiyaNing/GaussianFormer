@@ -1,7 +1,9 @@
 from .base_head import BaseTaskHead
 from .gaussian_head import GaussianHead
 from .opus_head import OPUSHead
-from .sparseworld_strict_head import SparseWorldStrictHead
 from .opus_gaussian_residual_head import OPUSGaussianResidualHead
 from .opus_semantic_gaussian_localagg_cuda_head import OPUSSemanticGaussianLocalAggCUDAHead
+from .point_anchored_semantic_gaussian import (
+    PointAnchoredSemanticGaussian, PointAnchoredSemanticGaussianCUDA)
 from .gaussian_opus_head import GaussianOPUSHead
+from .sparseworld_strict_head import SparseWorldStrictHead

@@ -2,8 +2,115 @@
 #     from vis import save_occ
 # except:
 #     print('Load Occupancy Visualization Tools Failed.')
-import time, argparse, os.path as osp, os
-import torch, numpy as np
+#
+# SparseWorld was released against MMCV 1/MMDet 2, while this repository uses
+# MMCV 2/MMDet 3.  Detect the compatibility config before importing either
+# stack, then execute the exact released graph in an isolated interpreter.
+import argparse
+import os
+import os.path as osp
+from pathlib import Path
+import runpy
+import re
+import subprocess
+import sys
+import time
+
+
+def _format_gaussianformer_log(message):
+    """Format delegated output like the MMEngine logs used by this project."""
+    timestamp = time.strftime('%Y/%m/%d %H:%M:%S', time.localtime())
+    return f'{timestamp} - mmengine - INFO - {message}'
+
+
+def _append_gaussianformer_log(log_file, message):
+    """Append one or more plain-text messages in GaussianFormer log format."""
+    if not log_file:
+        return
+    log_path = Path(log_file).expanduser().resolve()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open('a', encoding='utf-8') as stream:
+        for line in str(message).splitlines():
+            stream.write(_format_gaussianformer_log(line) + '\n')
+
+
+def make_eval_separator(epoch_label):
+    """Build the visible boundary between checkpoint evaluation results."""
+    label = str(epoch_label)
+    if label.isdigit():
+        title = f'Epoch {label}'
+    else:
+        title = f'Checkpoint {label}'
+    return f'-------------------- {title} --------------------'
+
+
+def _make_unique_log_path(work_dir, suffix):
+    """Choose a timestamped log path without overwriting an older run."""
+    directory = Path(work_dir).expanduser().resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+    candidate = directory / f'{timestamp}_{suffix}.log'
+    collision = 1
+    while candidate.exists():
+        candidate = directory / f'{timestamp}_{suffix}_{collision}.log'
+        collision += 1
+    return candidate
+
+
+def _delegate_sparseworld_official_eval() -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--py-config')
+    parser.add_argument('--work-dir', default='./out/tpv_lidarseg')
+    parser.add_argument('--resume-from', default='')
+    parser.add_argument('--eval-all', '--eval_all', action='store_true')
+    parser.add_argument('--sparseworld-python', default=os.environ.get('SPARSEWORLD_OFFICIAL_PYTHON', ''))
+    parser.add_argument('--eval-log-file', default='')
+    parser.add_argument('--eval-epoch', default='')
+    known, _ = parser.parse_known_args()
+    # ``eval_all`` is expanded into one ordinary eval subprocess per
+    # checkpoint in __main__. Each child then reaches this compatibility
+    # delegate with an explicit --resume-from.
+    if known.eval_all:
+        return
+    if not known.py_config:
+        return
+    config_path = Path(known.py_config).resolve()
+    if not config_path.is_file():
+        return
+    config = runpy.run_path(str(config_path))
+    if not config.get('sparseworld_official_compat', False):
+        return
+    checkpoint = known.resume_from or config.get('strict_checkpoint') or config.get('official_checkpoint')
+    if not checkpoint:
+        raise RuntimeError('SparseWorld official config requires --resume-from or strict_checkpoint.')
+    root = Path(__file__).resolve().parent
+    command = [sys.executable, str(root / 'tools' / 'sparseworld_official_compat.py'), 'eval',
+               '--official-root', str(config['official_root']), '--config', str(config['official_config']),
+               '--checkpoint', str(Path(checkpoint).resolve())]
+    if known.sparseworld_python:
+        command += ['--python', known.sparseworld_python]
+    command += list(config.get('official_eval_args', []))
+    print('delegating exact SparseWorld evaluation:', ' '.join(command), flush=True)
+    log_file = (Path(known.eval_log_file).expanduser().resolve()
+                if known.eval_log_file else
+                _make_unique_log_path(known.work_dir, 'eval'))
+    if known.eval_epoch:
+        _append_gaussianformer_log(log_file, make_eval_separator(known.eval_epoch))
+    completed = subprocess.run(
+        command, cwd=root, check=False, env=os.environ.copy(),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if completed.stdout:
+        print(completed.stdout, end='', flush=True)
+        _append_gaussianformer_log(log_file, completed.stdout)
+    completed.check_returncode()
+    print(f'GaussianFormer-format evaluation log saved to {log_file}', flush=True)
+    raise SystemExit(0)
+
+
+_delegate_sparseworld_official_eval()
+
+import torch
+import numpy as np
 import torch.distributed as dist
 import torch.nn.functional as F
 
@@ -14,6 +121,94 @@ from mmseg.models import build_segmentor
 
 import warnings
 warnings.filterwarnings("ignore")
+
+
+def _checkpoint_sort_key(path):
+    """Natural filename order, e.g. epoch_2.pth before epoch_10.pth."""
+    return tuple((1, int(part)) if part.isdigit() else (0, part.lower())
+                 for part in re.split(r'(\d+)', path.name))
+
+
+def discover_eval_checkpoints(work_dir):
+    """Return every direct ``*.pth`` child of work_dir in stable order."""
+    directory = Path(work_dir).expanduser().resolve()
+    if not directory.is_dir():
+        raise NotADirectoryError(f'--work-dir is not a directory: {directory}')
+    checkpoints = sorted(
+        (path for path in directory.glob('*.pth') if path.is_file()),
+        key=_checkpoint_sort_key)
+    if not checkpoints:
+        raise FileNotFoundError(f'No .pth checkpoints found in --work-dir: {directory}')
+    return checkpoints
+
+
+def checkpoint_epoch_label(checkpoint):
+    """Extract the epoch number from a conventional checkpoint filename."""
+    stem = Path(checkpoint).stem
+    match = re.search(r'(?:^|[_-])epoch[_-]?(\d+)(?:[_-]|$)', stem,
+                      flags=re.IGNORECASE)
+    return match.group(1) if match else stem
+
+
+def select_eval_checkpoints(checkpoints, start_from=None):
+    """Select checkpoints at or after ``start_from`` for eval-all."""
+    if start_from is None:
+        return list(checkpoints)
+    if start_from < 0:
+        raise ValueError('--start-from must be zero or greater')
+    selected = []
+    for checkpoint in checkpoints:
+        epoch_label = checkpoint_epoch_label(checkpoint)
+        if epoch_label.isdigit() and int(epoch_label) >= start_from:
+            selected.append(checkpoint)
+    if not selected:
+        raise FileNotFoundError(
+            f'No epoch checkpoint at or after --start-from {start_from}')
+    return selected
+
+
+def make_eval_all_log_path(work_dir):
+    """Choose a unique aggregate log path without overwriting an older run."""
+    return _make_unique_log_path(work_dir, 'eval_all')
+
+
+def run_eval_all(args):
+    """Run the existing evaluation entry point once for every checkpoint."""
+    if args.resume_from:
+        raise ValueError('--eval-all and --resume-from cannot be used together')
+    checkpoints = select_eval_checkpoints(
+        discover_eval_checkpoints(args.work_dir),
+        getattr(args, 'start_from', None))
+    root = Path(__file__).resolve().parent
+    log_file = make_eval_all_log_path(args.work_dir)
+    common = [
+        sys.executable, str(Path(__file__).resolve()),
+        '--py-config', str(Path(args.py_config).expanduser().resolve()),
+        '--work-dir', str(Path(args.work_dir).expanduser().resolve()),
+        '--eval-log-file', str(log_file),
+    ]
+    if args.sparseworld_python:
+        common += ['--sparseworld-python', args.sparseworld_python]
+    if args.seed is not None:
+        common += ['--seed', str(args.seed)]
+    if args.vis_occ:
+        common.append('--vis-occ')
+
+    print(f'[eval_all] Found {len(checkpoints)} checkpoints in '
+          f'{Path(args.work_dir).expanduser().resolve()}', flush=True)
+    for index, checkpoint in enumerate(checkpoints, start=1):
+        command = common + [
+            '--resume-from', str(checkpoint),
+            '--eval-tag', checkpoint.stem,
+            '--eval-epoch', checkpoint_epoch_label(checkpoint),
+        ]
+        if index > 1:
+            command.append('--skip-config-log')
+        print(f'\n[eval_all] [{index}/{len(checkpoints)}] Evaluating '
+              f'{checkpoint.name}', flush=True)
+        subprocess.run(command, cwd=root, check=True, env=os.environ.copy())
+    print(f'\n[eval_all] Completed {len(checkpoints)} checkpoints.', flush=True)
+    print(f'[eval_all] Results saved to {log_file}', flush=True)
 
 
 def pass_print(*args, **kwargs):
@@ -53,90 +248,15 @@ def get_occ_grid_shape(cfg, result_dict):
     return tuple(cfg.get('grid_shape', (200, 200, 16)))
 
 
-def build_sparseworld_future_metrics(cfg):
-    """Create one independent metric accumulator for each requested horizon.
-
-    This function is called only when a config explicitly declares
-    ``sparseworld_future_eval.enabled=True``.  Generic OPUS/Gaussian configs
-    therefore retain their historical evaluation behavior unchanged.
-    """
-    options = cfg.get('sparseworld_future_eval', None)
-    if not options or not options.get('enabled', False):
-        return None, None
-    if cfg.dataset_name_flag != 'occ3d':
-        raise ValueError('SparseWorld future occupancy evaluation currently requires Occ3D metrics')
-    horizons = tuple(options.get('horizons', (1, 2, 3, 4, 5, 6)))
-    if not horizons or min(horizons) < 1 or len(set(horizons)) != len(horizons):
-        raise ValueError('sparseworld_future_eval.horizons must be unique positive one-based indices')
-    from misc.sparseworld_eval import SparseWorldHorizonMetric
-    mask_name = get_occ3d_eval_mask_name(cfg)
-    metrics = {
-        horizon: SparseWorldHorizonMetric(
-            num_classes=18, use_lidar_mask=mask_name == 'lidar',
-            use_image_mask=mask_name == 'camera', free_label=17,
-            report_occ_iou=options.get('report_occ_iou', True))
-        for horizon in horizons
-    }
-    return options, metrics
-
-
-def update_sparseworld_future_metrics(metrics, result_dict, data, raw_model, grid_shape):
-    """Rasterize and score each requested future horizon independently.
-
-    Future predictions are expressed in the current ego coordinate system,
-    while future Occ3D grids are native to their own future ego frame.  The
-    function therefore maps predictions by the inverse of
-    ``future_ego_to_current`` before applying the unchanged OPUS rasterizer.
-    """
-    from misc.sparseworld_eval import points_current_to_future
-    required = ('future_predictions', 'future_logits')
-    if any(key not in result_dict for key in required):
-        raise KeyError(f'SparseWorld future evaluation requires result keys {required}')
-    required = ('future_occ_labels', 'future_occ_cam_masks', 'future_occ_lidar_masks',
-                'future_ego_to_current')
-    if any(key not in data for key in required):
-        raise KeyError(f'SparseWorld future evaluation requires data keys {required}')
-    if not hasattr(raw_model, 'head') or not hasattr(raw_model, 'num_refines'):
-        raise TypeError('SparseWorld future evaluation requires a SparseWorldTrajSegmentor-like model')
-
-    predictions, logits = result_dict['future_predictions'], result_dict['future_logits']
-    available_horizon = min(len(predictions), len(logits), data['future_occ_labels'].shape[1])
-    rasterizer = raw_model.head.rasterizer
-    for horizon, metric in metrics.items():
-        step = horizon - 1
-        if step >= available_horizon:
-            raise ValueError(
-                f'configured future horizon t+{horizon} is unavailable; model/data provide '
-                f'{available_horizon} future steps')
-        if predictions[step].shape[:2] != logits[step].shape[:2]:
-            raise ValueError(f'future point/logit shape mismatch at t+{horizon}')
-        for batch_index in range(predictions[step].shape[0]):
-            # SparseWorldStrict follows the upstream decoder/evaluation
-            # contract: its recurrence directly produces native future-ego
-            # coordinates. Legacy SparseWorldTrajSegmentor retains the local
-            # current-ego convention and is transformed as before.
-            future_points = predictions[step][batch_index]
-            if result_dict.get('future_prediction_coordinate') != 'native_future':
-                future_points = points_current_to_future(
-                    future_points, data['future_ego_to_current'][batch_index, step])
-            predicted_grid = rasterizer(
-                future_points.unsqueeze(0), logits[step][batch_index].unsqueeze(0),
-                group_size=raw_model.num_refines)[0]
-            metric.add_batch(
-                predicted_grid.reshape(*grid_shape).cpu().numpy(),
-                data['future_occ_labels'][batch_index, step].reshape(*grid_shape).cpu().numpy(),
-                data['future_occ_lidar_masks'][batch_index, step].reshape(*grid_shape).cpu().numpy(),
-                data['future_occ_cam_masks'][batch_index, step].reshape(*grid_shape).cpu().numpy())
-
 def main(local_rank, args):
-    # global settings
-    set_random_seed(args.seed)
-    torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.benchmark = True
-
     # load config
     cfg = Config.fromfile(args.py_config)
     cfg.work_dir = args.work_dir
+    # global settings (strict SparseWorld records seed 17 in checkpoint meta)
+    seed = cfg.get('seed', 42) if args.seed is None else args.seed
+    set_random_seed(seed)
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
 
     # init DDP
     if args.gpus > 1:
@@ -162,12 +282,24 @@ def main(local_rank, args):
         world_size = 1
     
     writer = None
-    timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
     os.makedirs(args.work_dir, exist_ok=True)
-    log_file = osp.join(args.work_dir, f'{timestamp}.log')
-    logger = MMLogger('selfocc', log_file=log_file)
+    shared_log_file = getattr(args, 'eval_log_file', '')
+    if shared_log_file:
+        log_file = str(Path(shared_log_file).expanduser().resolve())
+        log_mode = 'a'
+    else:
+        timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+        eval_tag = re.sub(r'[^A-Za-z0-9_.-]+', '_', args.eval_tag).strip('_.')
+        log_suffix = f'_{eval_tag}' if eval_tag else ''
+        log_file = osp.join(args.work_dir, f'{timestamp}{log_suffix}.log')
+        log_mode = 'w'
+    logger = MMLogger('selfocc', log_file=log_file, file_mode=log_mode)
     MMLogger._instance_dict['selfocc'] = logger
-    logger.info(f'Config:\n{cfg.pretty_text}')
+    if not getattr(args, 'skip_config_log', False):
+        logger.info(f'Config:\n{cfg.pretty_text}')
+    eval_epoch = getattr(args, 'eval_epoch', '')
+    if eval_epoch:
+        logger.info(make_eval_separator(eval_epoch))
 
     # build model
     import model
@@ -201,7 +333,8 @@ def main(local_rank, args):
         cfg.train_loader,
         cfg.val_loader,
         dist=distributed,
-        val_only=True)
+        val_only=True,
+        seed=cfg.get('dataloader_seed', None))
     
     # resume and load
     cfg.resume_from = ''
@@ -219,20 +352,31 @@ def main(local_rank, args):
         raw_model.load_state_dict(ckpt.get("state_dict", ckpt), strict=True)
         print(f'successfully resumed.')
     elif cfg.load_from:
-        ckpt = torch.load(cfg.load_from, map_location='cpu')
-        if 'state_dict' in ckpt:
-            state_dict = ckpt['state_dict']
+        if cfg.get('sparseworld_official_compat', False):
+            from misc.sparseworld_compat_checkpoint import load_sparseworld_compat_checkpoint
+            verified = load_sparseworld_compat_checkpoint(
+                raw_model, cfg.load_from, cfg.get('checkpoint_manifest', None))
+            logger.info('Strictly loaded %d SparseWorld official-compat tensors.', verified)
         else:
-            state_dict = ckpt
-        try:
-            print(raw_model.load_state_dict(state_dict, strict=False))
-        except:
-            from misc.checkpoint_util import refine_load_from_sd
-            print(raw_model.load_state_dict(
-                refine_load_from_sd(state_dict), strict=False))
+            ckpt = torch.load(cfg.load_from, map_location='cpu')
+            if 'state_dict' in ckpt:
+                state_dict = ckpt['state_dict']
+            else:
+                state_dict = ckpt
+            try:
+                print(raw_model.load_state_dict(
+                    state_dict, strict=cfg.get('strict_load', False)))
+            except:
+                from misc.checkpoint_util import refine_load_from_sd
+                print(raw_model.load_state_dict(
+                    refine_load_from_sd(state_dict), strict=False))
         
     print_freq = cfg.print_freq
-    if cfg.dataset_name_flag == 'surroundocc':
+    strict_metric = None
+    if cfg.get('sparseworld_strict_eval', False):
+        from misc.sparseworld_strict_eval import SparseWorldStrictMetric
+        strict_metric = SparseWorldStrictMetric()
+    elif cfg.dataset_name_flag == 'surroundocc':
         from misc.metric_util import MeanIoU
         miou_metric = MeanIoU(
             list(range(1, 17)),
@@ -253,8 +397,6 @@ def main(local_rank, args):
     else:
         print("Not emplement this dataset:", cfg.dataset_name_flag)
         exit(0)
-    future_eval_options, future_metrics = build_sparseworld_future_metrics(cfg)
-    
 
     my_model.eval()
     os.environ['eval'] = 'true'
@@ -267,7 +409,9 @@ def main(local_rank, args):
                     data[k] = data[k].cuda()
             input_imgs = data.pop('img')
             result_dict = my_model(imgs=input_imgs, metas=data)
-            if 'final_occ' in result_dict:
+            if strict_metric is not None:
+                strict_metric.add_batch(result_dict, data)
+            elif 'final_occ' in result_dict:
                 for idx, pred in enumerate(result_dict['final_occ']):
                     pred_occ = pred
                     gt_occ = result_dict['sampled_label'][idx]
@@ -285,34 +429,20 @@ def main(local_rank, args):
                         miou_metric.add_batch(
                             pred_occ, gt_occ, occ_lidar_mask, occ_cam_mask)
                     # breakpoint()
-            # Future metrics are strictly opt-in and deliberately separate
-            # from the current-frame accumulator above.  This prevents any
-            # future horizon from changing historical non-SparseWorld scores.
-            if future_metrics is not None:
-                update_sparseworld_future_metrics(
-                    future_metrics, result_dict, data, raw_model,
-                    get_occ_grid_shape(cfg, result_dict))
-            
             if i_iter_val % print_freq == 0 and local_rank == 0:
                 logger.info('[EVAL] Iter %5d'%(i_iter_val))
 
-    if cfg.dataset_name_flag == 'surroundocc':       
+    if strict_metric is not None:
+        strict_metric.synchronize(torch.device('cuda', torch.cuda.current_device()))
+        eval_results = strict_metric.results()
+        logger.info(eval_results)
+    elif cfg.dataset_name_flag == 'surroundocc':
         miou, iou2 = miou_metric._after_epoch()
         logger.info(f'mIoU: {miou}, iou2: {iou2}')
         miou_metric.reset()
     elif cfg.dataset_name_flag == 'occ3d':
         eval_results = miou_metric.count_miou_metric()
         logger.info(eval_results)
-
-    if future_metrics is not None:
-        # Unlike the legacy current-frame evaluator, future metrics are
-        # reduced explicitly so each t+k value is valid under multi-GPU eval.
-        metric_device = torch.device('cuda', torch.cuda.current_device())
-        for metric in future_metrics.values():
-            metric.synchronize(metric_device)
-        if local_rank == 0:
-            for horizon, metric in future_metrics.items():
-                logger.info('[SparseWorld Future t+%d] %s', horizon, metric.results())
 
     
     if writer is not None:
@@ -325,13 +455,32 @@ if __name__ == '__main__':
     parser.add_argument('--py-config', default='config/tpv_lidarseg.py')
     parser.add_argument('--work-dir', type=str, default='./out/tpv_lidarseg')
     parser.add_argument('--resume-from', type=str, default='')
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--eval-all', '--eval_all', dest='eval_all',
+                        action='store_true',
+                        help='sequentially evaluate every direct *.pth file in --work-dir')
+    parser.add_argument('--start-from', type=int, default=None,
+                        help='in --eval-all mode, evaluate epochs at or after this number')
+    parser.add_argument('--sparseworld-python', type=str, default='',
+                        help='legacy SparseWorld Python; used only by the official compatibility config')
+    parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--vis-occ', action='store_true', default=False)
+    parser.add_argument('--eval-tag', type=str, default='', help=argparse.SUPPRESS)
+    parser.add_argument('--eval-log-file', type=str, default='', help=argparse.SUPPRESS)
+    parser.add_argument('--eval-epoch', type=str, default='', help=argparse.SUPPRESS)
+    parser.add_argument('--skip-config-log', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.start_from is not None and not args.eval_all:
+        parser.error('--start-from can only be used together with --eval-all')
+    if args.start_from is not None and args.start_from < 0:
+        parser.error('--start-from must be zero or greater')
     
     ngpus = torch.cuda.device_count()
     args.gpus = ngpus
     print(args)
+
+    if args.eval_all:
+        run_eval_all(args)
+        raise SystemExit(0)
 
     if ngpus > 1:
         torch.multiprocessing.spawn(main, args=(args,), nprocs=args.gpus)
