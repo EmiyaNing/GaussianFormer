@@ -50,5 +50,46 @@ PyTorch fallback to keep the first training run bounded. Install and wire a
 GPU KNN backend from `requirements-opus.txt` before full 76,800-point matching
 experiments.
 
-`clarify_reop.md` documents the dependency boundaries and release verification
-matrix for this branch.
+## SparseWorldStrict
+
+`SparseWorldStrict` is a native port for this repository's Python 3.10 and
+MMCV-2/MMDet-3 stack. It does not import or launch the incompatible official
+runtime. Build the vendored MSMV extension before GPU evaluation:
+
+```bash
+python3.10 -m pip install -v -e model/ops/opus_msmv_sampling
+```
+
+The configuration expects the official AD-MLP and OccWorld artifacts at
+`admlp/stp3_val/data_nuscene.pkl` and
+`occworld/nuscenes_infos_{train,val}_temporal_v3_scene.pkl`, plus the local
+nuScenes/Occ3D data paths declared in `config/opus/sparseworld_strict.py`.
+
+Convert the released checkpoint. The tool builds the local model, audits all
+keys/shapes/dtypes, performs `strict=True` before and after serialization, and
+writes a per-tensor SHA-256 manifest:
+
+```bash
+python3.10 tools/convert_sparseworld_strict_checkpoint.py \
+  --config config/opus/sparseworld_strict.py \
+  --src ../SparseWorld/ckpts/epoch_56.pth \
+  --dst ckpts/sparseworld_strict_epoch_56.pth
+```
+
+Evaluate or train with the repository's standard entry points:
+
+```bash
+python3.10 eval.py \
+  --py-config config/opus/sparseworld_strict.py \
+  --resume-from ckpts/sparseworld_strict_epoch_56.pth \
+  --work-dir out/sparseworld_strict_eval
+
+python3.10 train.py \
+  --py-config config/opus/sparseworld_strict.py \
+  --work-dir out/sparseworld_strict_train
+```
+
+The released target is Avg mIoU **13.20** and Avg occupied IoU **22.03** over
+the 0/2/4/6 horizons, without a camera or lidar evaluation mask. The CPU MSMV
+fallback is intended for contract tests; full precision reproduction should
+use the compiled CUDA extension.
