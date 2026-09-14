@@ -2,7 +2,7 @@
 #     from vis import save_occ
 # except:
 #     print('Load Occupancy Visualization Tools Failed.')
-import time, argparse, os.path as osp, os
+import time, argparse, os.path as osp, os, hashlib, json
 import torch, numpy as np
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -18,6 +18,17 @@ warnings.filterwarnings("ignore")
 
 def pass_print(*args, **kwargs):
     pass
+
+
+def json_safe(value):
+    """Convert absent-class NaNs to null for standards-compliant JSON."""
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
 
 
 def get_occ3d_eval_mask_name(cfg):
@@ -131,12 +142,16 @@ def update_sparseworld_future_metrics(metrics, result_dict, data, raw_model, gri
 def main(local_rank, args):
     # global settings
     set_random_seed(args.seed)
-    torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = args.deterministic
+    torch.backends.cudnn.benchmark = not args.deterministic
 
     # load config
     cfg = Config.fromfile(args.py_config)
     cfg.work_dir = args.work_dir
+    if args.batch_size is not None:
+        cfg.val_loader.batch_size = args.batch_size
+    if args.num_workers is not None:
+        cfg.val_loader.num_workers = args.num_workers
 
     # init DDP
     if args.gpus > 1:
@@ -216,14 +231,18 @@ def main(local_rank, args):
     if cfg.resume_from and osp.exists(cfg.resume_from):
         map_location = 'cpu'
         ckpt = torch.load(cfg.resume_from, map_location=map_location)
-        raw_model.load_state_dict(ckpt.get("state_dict", ckpt), strict=True)
+        from misc.checkpoint_util import select_model_state_dict
+        state_dict, state_key = select_model_state_dict(
+            ckpt, prefer_ema=cfg.get('load_ema_checkpoint', False))
+        raw_model.load_state_dict(state_dict, strict=True)
+        logger.info(f'loaded evaluation model weights from {state_key}')
         print(f'successfully resumed.')
     elif cfg.load_from:
         ckpt = torch.load(cfg.load_from, map_location='cpu')
-        if 'state_dict' in ckpt:
-            state_dict = ckpt['state_dict']
-        else:
-            state_dict = ckpt
+        from misc.checkpoint_util import select_model_state_dict
+        state_dict, state_key = select_model_state_dict(
+            ckpt, prefer_ema=cfg.get('load_ema_checkpoint', False))
+        logger.info(f'loaded evaluation model weights from {state_key}')
         try:
             print(raw_model.load_state_dict(state_dict, strict=False))
         except:
@@ -258,15 +277,73 @@ def main(local_rank, args):
 
     my_model.eval()
     os.environ['eval'] = 'true'
+    prediction_digest = hashlib.sha256()
+    evaluated_batches = 0
+    evaluated_sample_tokens = []
+    replay_summary = None
+    if args.zero_replay:
+        replay_summary = dict(
+            snapshot_step=args.snapshot_step, batches=0, exact=True,
+            max_abs_points=0., max_abs_logits=0., max_abs_trajectories=0.)
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize()
+    eval_started = time.perf_counter()
 
     with torch.no_grad():
         for i_iter_val, data in enumerate(val_dataset_loader):
+            batch_tokens = data.get('sample_idx', ())
+            if isinstance(batch_tokens, str):
+                batch_tokens = (batch_tokens,)
+            evaluated_sample_tokens.extend(str(token) for token in batch_tokens)
             
             for k in list(data.keys()):
                 if isinstance(data[k], torch.Tensor):
                     data[k] = data[k].cuda()
             input_imgs = data.pop('img')
-            result_dict = my_model(imgs=input_imgs, metas=data)
+            result_dict = my_model(
+                imgs=input_imgs, metas=data,
+                forecast_snapshot_step=args.snapshot_step,
+                forecast_zero_replay=args.zero_replay)
+            if replay_summary is not None:
+                replay = result_dict.get('forecast_zero_replay')
+                snapshot = result_dict.get('forecast_snapshot')
+                if replay is None or snapshot is None:
+                    raise RuntimeError('model did not return requested forecast replay state')
+                start = args.snapshot_step
+                pairs = (
+                    ('points', result_dict['future_predictions'][start:],
+                     replay['points'], 'max_abs_points'),
+                    ('logits', result_dict['future_logits'][start:],
+                     replay['logits'], 'max_abs_logits'),
+                    ('trajectories', result_dict['pred_traj'][:, start:].split(1, dim=1),
+                     replay['trajectories'], 'max_abs_trajectories'))
+                for name, expected, actual, maximum_key in pairs:
+                    if len(expected) != len(actual):
+                        raise AssertionError(
+                            f'zero replay {name} length mismatch: '
+                            f'{len(expected)} != {len(actual)}')
+                    for expected_tensor, actual_tensor in zip(expected, actual):
+                        difference = (expected_tensor - actual_tensor).abs().max().item()
+                        replay_summary[maximum_key] = max(
+                            replay_summary[maximum_key], difference)
+                        replay_summary['exact'] &= torch.equal(
+                            expected_tensor, actual_tensor)
+                replay_summary['batches'] += 1
+                if 'snapshot_metadata' not in replay_summary:
+                    replay_summary['snapshot_metadata'] = snapshot['tensor_metadata']
+                    replay_summary['active_query_count'] = int(
+                        snapshot['features'].shape[1])
+                    replay_summary['active_slot_count'] = int(
+                        snapshot['slot_ids'].numel())
+            for digest_key in ('final_occ',):
+                if digest_key in result_dict:
+                    value = result_dict[digest_key].detach().contiguous().cpu().numpy()
+                    prediction_digest.update(value.tobytes())
+            for digest_key in ('future_predictions', 'future_logits'):
+                for value in result_dict.get(digest_key, ()):
+                    array = value.detach().float().contiguous().cpu().numpy()
+                    prediction_digest.update(array.tobytes())
             if 'final_occ' in result_dict:
                 for idx, pred in enumerate(result_dict['final_occ']):
                     pred_occ = pred
@@ -295,6 +372,24 @@ def main(local_rank, args):
             
             if i_iter_val % print_freq == 0 and local_rank == 0:
                 logger.info('[EVAL] Iter %5d'%(i_iter_val))
+            evaluated_batches += 1
+            if args.max_batches is not None and evaluated_batches >= args.max_batches:
+                break
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elapsed = time.perf_counter() - eval_started
+    summary = {
+        'evaluated_batches': evaluated_batches,
+        'evaluated_samples': int(miou_metric.cnt),
+        'elapsed_seconds': elapsed,
+        'prediction_sha256': prediction_digest.hexdigest(),
+        'sample_tokens': evaluated_sample_tokens,
+        'peak_cuda_memory_bytes': (
+            int(torch.cuda.max_memory_allocated()) if torch.cuda.is_available() else None),
+    }
+    if replay_summary is not None:
+        summary['zero_replay'] = replay_summary
 
     if cfg.dataset_name_flag == 'surroundocc':       
         miou, iou2 = miou_metric._after_epoch()
@@ -303,6 +398,8 @@ def main(local_rank, args):
     elif cfg.dataset_name_flag == 'occ3d':
         eval_results = miou_metric.count_miou_metric()
         logger.info(eval_results)
+        summary['current'] = eval_results
+        summary['current_confusion_matrix'] = miou_metric.hist.tolist()
 
     if future_metrics is not None:
         # Unlike the legacy current-frame evaluator, future metrics are
@@ -312,7 +409,22 @@ def main(local_rank, args):
             metric.synchronize(metric_device)
         if local_rank == 0:
             for horizon, metric in future_metrics.items():
-                logger.info('[SparseWorld Future t+%d] %s', horizon, metric.results())
+                result = metric.results()
+                result['seconds'] = horizon * future_eval_options.get(
+                    'step_seconds', 1.)
+                logger.info('[SparseWorld Future t+%d] %s', horizon, result)
+                summary.setdefault('future', {})[str(horizon)] = result
+                summary.setdefault('future_confusion_matrices', {})[str(horizon)] = \
+                    metric.semantic.hist.tolist()
+
+    if local_rank == 0:
+        logger.info('[EVAL SUMMARY] %s', summary)
+        if args.metrics_out:
+            metrics_path = osp.abspath(args.metrics_out)
+            os.makedirs(osp.dirname(metrics_path), exist_ok=True)
+            with open(metrics_path, 'w', encoding='utf-8') as handle:
+                json.dump(json_safe(summary), handle, indent=2,
+                          sort_keys=True, allow_nan=False)
 
     
     if writer is not None:
@@ -327,6 +439,13 @@ if __name__ == '__main__':
     parser.add_argument('--resume-from', type=str, default='')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--vis-occ', action='store_true', default=False)
+    parser.add_argument('--max-batches', type=int, default=None)
+    parser.add_argument('--batch-size', type=int, default=None)
+    parser.add_argument('--num-workers', type=int, default=None)
+    parser.add_argument('--metrics-out', type=str, default='')
+    parser.add_argument('--deterministic', action='store_true')
+    parser.add_argument('--snapshot-step', type=int, default=None)
+    parser.add_argument('--zero-replay', action='store_true')
     args = parser.parse_args()
     
     ngpus = torch.cuda.device_count()

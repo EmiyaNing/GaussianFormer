@@ -14,14 +14,25 @@ class _Rasterizer(nn.Module):
     def forward(self, points, logits, group_size=48):
         scores=logits.sigmoid(); b, n = points.shape[:2]; threshold=self.threshold.to(scores)
         if threshold.numel()==1: threshold=threshold.expand(scores.shape[-1])
-        lower=points.new_tensor(self.pc_range[:3]); out=[]
+        lower=points.new_tensor(self.pc_range[:3]); extent=points.new_tensor(self.pc_range[3:])-lower; out=[]
         for i in range(b):
             p, s=points[i], scores[i]
             if group_size > 1 and p.shape[0] % group_size == 0:
+                grouped_points=p.view(-1,group_size,3)
+                grouped_scores=s.view(-1,group_size,s.shape[-1])
+                # Upstream applies a normalized-coordinate compactness prior
+                # to manmade/vegetation before score thresholding.
+                normalized=(grouped_points-lower)/extent
+                normalized_distance=(normalized-normalized.mean(1,keepdim=True)).norm(dim=-1)
+                labels=grouped_scores.argmax(-1)
+                for class_index in (15,16):
+                    mask=labels==class_index
+                    grouped_scores[mask]=grouped_scores[mask]*torch.clamp(
+                        .1/normalized_distance[mask],max=1.)[:,None]
                 # ``p`` stores Q consecutive groups of R refined points.
                 # Expand each group centre back to Q*R before computing the
                 # source renderer's centre-distance validity mask.
-                centers = p.view(-1, group_size, 3).mean(1)
+                centers = grouped_points.mean(1)
                 centers = centers.repeat_interleave(group_size, dim=0)
                 distances = (p - centers).norm(dim=-1)
                 p,s=p[distances < self.center_distance_threshold],s[distances < self.center_distance_threshold]

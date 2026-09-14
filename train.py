@@ -185,6 +185,7 @@ def main(local_rank, args):
             warmup_lr_init=1e-6,
             t_in_epochs=False)
     amp = cfg.get('amp', False)
+    non_blocking_transfer = bool(cfg.get('non_blocking_transfer', False))
     if amp:
         # Official OPUS-V1 uses a fixed FP16 loss scale of 512.  A very large
         # growth interval preserves that scale while retaining GradScaler's
@@ -200,6 +201,7 @@ def main(local_rank, args):
     epoch = 0
     global_iter = 0
     last_iter = 0
+    resume_ckpt = None
 
     cfg.resume_from = ''
     if osp.exists(osp.join(args.work_dir, 'latest.pth')):
@@ -213,33 +215,64 @@ def main(local_rank, args):
     if cfg.resume_from and osp.exists(cfg.resume_from):
         map_location = 'cpu'
         ckpt = torch.load(cfg.resume_from, map_location=map_location)
+        resume_ckpt = ckpt
         print(raw_model.load_state_dict(ckpt['state_dict'], strict=False))
         optimizer.load_state_dict(ckpt['optimizer'])
         scheduler.load_state_dict(ckpt['scheduler'])
+        if amp and ckpt.get('scaler') is not None:
+            scaler.load_state_dict(ckpt['scaler'])
         epoch = ckpt['epoch']
         global_iter = ckpt['global_iter']
-        last_iter = ckpt['last_iter'] if 'last_iter' in ckpt else 0
+        last_iter = ckpt.get('last_iter', 0) if args.iter_resume else 0
         if hasattr(train_dataset_loader.sampler, 'set_last_iter'):
             train_dataset_loader.sampler.set_last_iter(last_iter)
         print(f'successfully resumed from epoch {epoch}')
     elif cfg.load_from:
         ckpt = torch.load(cfg.load_from, map_location='cpu')
-        if 'state_dict' in ckpt:
-            state_dict = ckpt['state_dict']
-        else:
-            state_dict = ckpt
+        from misc.checkpoint_util import select_model_state_dict
+        state_dict, state_key = select_model_state_dict(
+            ckpt, prefer_ema=cfg.get('load_ema_checkpoint', False))
+        logger.info(f'loading initial model weights from {state_key}')
         try:
             print(raw_model.load_state_dict(state_dict, strict=False))
         except:
             from misc.checkpoint_util import refine_load_from_sd
             print(raw_model.load_state_dict(
                 refine_load_from_sd(state_dict), strict=False))
+
+    model_ema_cfg = cfg.get('model_ema', {})
+    model_ema = None
+    eval_with_ema = False
+    if model_ema_cfg and model_ema_cfg.get('enabled', False):
+        from misc.model_ema import ModelEMA
+        model_ema = ModelEMA(
+            raw_model,
+            decay=model_ema_cfg.get('decay', 0.9998),
+            update_buffers=model_ema_cfg.get('update_buffers', True))
+        eval_with_ema = model_ema_cfg.get('eval_with_ema', True)
+        if resume_ckpt is not None and resume_ckpt.get('ema_state_dict') is not None:
+            print(model_ema.load_state_dict(
+                resume_ckpt['ema_state_dict'], strict=True))
+            model_ema.num_updates = int(resume_ckpt.get('ema_updates', 0))
+            logger.info(
+                f'restored model EMA after {model_ema.num_updates} updates')
+        elif resume_ckpt is not None:
+            logger.warning(
+                'resume checkpoint has no EMA state; initialized EMA from '
+                'the resumed training weights')
+        logger.info(
+            'model EMA enabled: decay=%.6f, update_buffers=%s, eval_with_ema=%s',
+            model_ema.decay, model_ema.update_buffers, eval_with_ema)
         
     # training
     print_freq = cfg.print_freq
     first_run = True
     grad_accumulation = args.gradient_accumulation
     grad_norm = 0
+    consecutive_amp_overflows = 0
+    amp_overflow_count = 0
+    max_consecutive_amp_overflows = int(
+        cfg.get('max_consecutive_amp_overflows', 3))
     from misc.metric_util import MeanIoU
     if cfg.dataset_name_flag == 'surroundocc':
         miou_metric = MeanIoU(
@@ -274,12 +307,17 @@ def main(local_rank, args):
                 raise AttributeError(
                     'enable_model_set_epoch=True requires model.set_epoch(epoch)')
             raw_model.set_epoch(epoch)
+        if cfg.get('enable_dataset_set_epoch', False):
+            if not hasattr(train_dataset_loader.dataset, 'set_epoch'):
+                raise AttributeError(
+                    'enable_dataset_set_epoch=True requires dataset.set_epoch(epoch)')
+            train_dataset_loader.dataset.set_epoch(epoch)
         os.environ['eval'] = 'false'
         if hasattr(train_dataset_loader.sampler, 'set_epoch'):
             train_dataset_loader.sampler.set_epoch(epoch)
         loss_list = []
         loss_component_history = {}
-        time.sleep(10)
+        time.sleep(cfg.get('epoch_start_sleep', 10))
         data_time_s = time.time()
         time_s = time.time()
         for i_iter, data in enumerate(train_dataset_loader):
@@ -288,7 +326,8 @@ def main(local_rank, args):
 
             for k in list(data.keys()):
                 if isinstance(data[k], torch.Tensor):
-                    data[k] = data[k].cuda()
+                    data[k] = data[k].cuda(
+                        non_blocking=non_blocking_transfer)
             input_imgs = data.pop('img')            
             data_time_e = time.time()
 
@@ -309,6 +348,7 @@ def main(local_rank, args):
                     raise FloatingPointError(
                         f'Non-finite loss at global_iter={global_iter}: {loss.item()}')
                 loss = loss / grad_accumulation
+            optimizer_step_succeeded = False
             if not amp:
                 loss.backward()
                 if (global_iter + 1) % grad_accumulation == 0:
@@ -323,22 +363,57 @@ def main(local_rank, args):
                         error_if_nonfinite=cfg.get('fail_on_nonfinite_grad', False))
                     optimizer.step()
                     optimizer.zero_grad()
+                    optimizer_step_succeeded = True
             else:
                 scaler.scale(loss).backward()
                 if (global_iter + 1) % grad_accumulation == 0:
                     scaler.unscale_(optimizer)
-                    if cfg.get('fail_on_nonfinite_grad', False):
-                        bad_gradients = find_nonfinite_gradients(my_model)
-                        if bad_gradients:
+                    bad_gradients = find_nonfinite_gradients(my_model)
+                    recover_overflow = cfg.get('recover_amp_overflow', True)
+                    if bad_gradients and recover_overflow:
+                        scale_before = scaler.get_scale()
+                        # unscale_ has recorded the overflow. GradScaler skips
+                        # this optimizer update and lowers its scale safely.
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad()
+                        scale_after = scaler.get_scale()
+                        consecutive_amp_overflows += 1
+                        amp_overflow_count += 1
+                        grad_norm = float('inf')
+                        if local_rank == 0:
+                            logger.warning(
+                                '[AMP] skipped optimizer step at global_iter=%d; '
+                                'scale %.1f -> %.1f; non-finite gradients: %s',
+                                global_iter, scale_before, scale_after,
+                                ', '.join(bad_gradients[:20]))
+                        if (consecutive_amp_overflows >
+                                max_consecutive_amp_overflows):
+                            raise FloatingPointError(
+                                'AMP overflow persisted for '
+                                f'{consecutive_amp_overflows} consecutive steps '
+                                f'at global_iter={global_iter}: '
+                                + ', '.join(bad_gradients[:20]))
+                    else:
+                        if (bad_gradients and
+                                cfg.get('fail_on_nonfinite_grad', False)):
                             raise FloatingPointError(
                                 f'Non-finite gradients at global_iter={global_iter}: '
                                 + ', '.join(bad_gradients[:20]))
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        my_model.parameters(), cfg.grad_max_norm,
-                        error_if_nonfinite=cfg.get('fail_on_nonfinite_grad', False))
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
+                        grad_norm = torch.nn.utils.clip_grad_norm_(
+                            my_model.parameters(), cfg.grad_max_norm,
+                            error_if_nonfinite=cfg.get(
+                                'fail_on_nonfinite_grad', False))
+                        scale_before = scaler.get_scale()
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad()
+                        optimizer_step_succeeded = (
+                            scaler.get_scale() >= scale_before)
+                        consecutive_amp_overflows = 0
+
+            if optimizer_step_succeeded and model_ema is not None:
+                model_ema.update(raw_model)
 
             loss_list.append(loss.detach().cpu().item())
             # Keep a per-component history over the same logging window as
@@ -382,8 +457,13 @@ def main(local_rank, args):
                 if (i_iter + 1) % 50 == 0 and local_rank == 0:
                     dict_to_save = {
                         'state_dict': raw_model.state_dict(),
+                        'ema_state_dict': (
+                            model_ema.state_dict() if model_ema is not None else None),
+                        'ema_updates': (
+                            model_ema.num_updates if model_ema is not None else 0),
                         'optimizer': optimizer.state_dict(),
                         'scheduler': scheduler.state_dict(),
+                        'scaler': scaler.state_dict() if amp else None,
                         'epoch': epoch,
                         'global_iter': global_iter,
                         'last_iter': i_iter + 1,
@@ -398,8 +478,13 @@ def main(local_rank, args):
         if local_rank == 0:
             dict_to_save = {
                 'state_dict': raw_model.state_dict(),
+                'ema_state_dict': (
+                    model_ema.state_dict() if model_ema is not None else None),
+                'ema_updates': (
+                    model_ema.num_updates if model_ema is not None else 0),
                 'optimizer': optimizer.state_dict(),
                 'scheduler': scheduler.state_dict(),
+                'scaler': scaler.state_dict() if amp else None,
                 'epoch': epoch + 1,
                 'global_iter': global_iter,
             }
@@ -414,7 +499,13 @@ def main(local_rank, args):
         # eval
         if epoch % cfg.get('eval_every_epochs', 1) != 0:
             continue
-        my_model.eval()
+        eval_model = (
+            model_ema.module
+            if model_ema is not None and eval_with_ema else my_model)
+        eval_model.eval()
+        if model_ema is not None and eval_with_ema:
+            logger.info(
+                f'[EVAL] using EMA weights after {model_ema.num_updates} updates')
         os.environ['eval'] = 'true'
         val_loss_list = []
         val_detail_sum = {}
@@ -424,11 +515,12 @@ def main(local_rank, args):
             for i_iter_val, data in enumerate(val_dataset_loader):
                 for k in list(data.keys()):
                     if isinstance(data[k], torch.Tensor):
-                        data[k] = data[k].cuda()
+                        data[k] = data[k].cuda(
+                            non_blocking=non_blocking_transfer)
                 input_imgs = data.pop('img')
                 
                 with torch.cuda.amp.autocast(amp):
-                    result_dict = my_model(imgs=input_imgs, metas=data)
+                    result_dict = eval_model(imgs=input_imgs, metas=data)
 
                     loss_input = {
                         'metas': data,

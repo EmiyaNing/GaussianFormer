@@ -23,17 +23,22 @@ model = dict(
     future_queries=future_queries, finetune_epoch=5, embed_dims=256, num_refines=48, pc_range=pc_range, ego_state_dim=21)
 
 enable_model_set_epoch = True
-sparseworld_future_eval = dict(enabled=True, horizons=[1,2,3,4,5,6], report_occ_iou=True)
+# Match the released SparseWorld evaluation: nuScenes keyframes are 0.5 s
+# apart, the reported 1/2/3 s results are steps 2/4/6, and no visibility mask
+# is applied by the upstream Metric_mIoU_Temporal implementation.
+occ3d_eval_mask = 'none'
+sparseworld_future_eval = dict(
+    enabled=True, horizons=[2,4,6], step_seconds=.5, report_occ_iou=True)
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
     dict(type='LoadMultiViewImageHistory', num_history=num_frames-1, num_cams=6, to_float32=True, pad_history=False),
     dict(type='LoadOccupancyOcc3D', occ3d_path=occ3d_path, semantic=True, pc_range=pc_range, grid_size=grid_size, model_coord='ego', train_mask_type='none'),
     dict(type='LoadSparseWorldFutureOccupancy', occ3d_path=occ3d_path), dict(type='PrepareOPUSTarget', max_gt_points=max_gt_points, empty_label=17),
     dict(type='ResizeCropFlipImage'), dict(type='PhotoMetricDistortionMultiViewImage'), dict(type='NormalizeMultiviewImage', **img_norm_cfg), dict(type='DefaultFormatBundle'), dict(type='NuScenesAdaptor', use_ego=True, num_cams=30)]
-trajectory_return_keys = ['img','projection_mat','image_wh','occ_label','occ_xyz','occ_cam_mask','occ_lidar_mask','occ_nonempty_mask','occ_loss_mask','future_occ_labels','future_occ_cam_masks','future_occ_lidar_masks','future_ego_to_current','temporal_trajs','temporal_ego_states']
-train_dataset_config = dict(type='NuScenesSparseWorldTrajectoryDataset', data_root=data_root, imageset=anno_root+'nuscenes_infos_train_sweeps_occ.pkl', data_aug_conf=data_aug_conf, pipeline=train_pipeline, pc_range=pc_range, occ3d=True, occ3d_coord='ego', phase='train', admlp_state_path='admlp/stp3_val/data_nuscene.pkl', trajectory_path='occworld/nuscenes_infos_train_temporal_v3_scene.pkl', return_keys=trajectory_return_keys)
+trajectory_return_keys = ['sample_idx','scene_token','img','projection_mat','image_wh','occ_label','occ_xyz','occ_cam_mask','occ_lidar_mask','occ_nonempty_mask','occ_loss_mask','future_occ_labels','future_occ_cam_masks','future_occ_lidar_masks','future_ego_to_current','temporal_trajs','temporal_ego_states']
+train_dataset_config = dict(type='NuScenesSparseWorldTrajectoryDataset', data_root=data_root, imageset=anno_root+'nuscenes_infos_train_sweeps_occ.pkl', data_aug_conf=data_aug_conf, pipeline=train_pipeline, pc_range=pc_range, occ3d=True, occ3d_coord='ego', phase='train', admlp_state_path='admlp/stp3_val/data_nuscene.pkl', trajectory_path='occworld/nuscenes_infos_train_temporal_v3_scene.pkl', official_boundary_filter=True, history_keyframes_only=True, return_keys=trajectory_return_keys)
 test_pipeline = [v for v in train_pipeline if v.get('type') != 'PhotoMetricDistortionMultiViewImage']
-val_dataset_config = dict(type='NuScenesSparseWorldTrajectoryDataset', data_root=data_root, imageset=anno_root+'nuscenes_infos_val_sweeps_occ.pkl', data_aug_conf=data_aug_conf, pipeline=test_pipeline, pc_range=pc_range, occ3d=True, occ3d_coord='ego', phase='val', admlp_state_path='admlp/stp3_val/data_nuscene.pkl', trajectory_path='occworld/nuscenes_infos_val_temporal_v3_scene.pkl', return_keys=trajectory_return_keys)
+val_dataset_config = dict(type='NuScenesSparseWorldTrajectoryDataset', data_root=data_root, imageset=anno_root+'nuscenes_infos_val_sweeps_occ.pkl', data_aug_conf=data_aug_conf, pipeline=test_pipeline, pc_range=pc_range, occ3d=True, occ3d_coord='ego', phase='val', admlp_state_path='admlp/stp3_val/data_nuscene.pkl', trajectory_path='occworld/nuscenes_infos_val_temporal_v3_scene.pkl', official_boundary_filter=True, history_keyframes_only=True, return_keys=trajectory_return_keys)
 train_loader = dict(batch_size=2,num_workers=4,shuffle=True); val_loader=dict(batch_size=2,num_workers=4)
 loss = dict(_delete_=True, type='SparseWorldStrictLoss', current_loss=dict(type='OPUSSetLoss',stage_weights=[1.]*6,loss_mode='official_v1',lambda_cls=2.,focal_gamma=2.,smooth_l1_beta=.2,lambda_pts=.5,empty_dist_thr=.2,empty_weight=5.,rare_classes=[0,2,5,8],rare_weight=10.,class_weights=[10,5,10,5,5,10,10,5,10,5,5,1,5,1,1,2,1],pc_range=pc_range), pc_range=pc_range)
 loss_input_convertion = dict(opus_pred_points='opus_pred_points',opus_pred_logits='opus_pred_logits',future_pred_points='future_pred_points',future_pred_logits='future_pred_logits',pred_traj='pred_traj',temporal_pred_points='temporal_pred_points',temporal_pred_logits='temporal_pred_logits',sparseworld_pretrain='sparseworld_pretrain')

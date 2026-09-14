@@ -4,6 +4,7 @@ This module deliberately consumes AD-MLP/OccWorld *pickle artifacts* only.  It
 never imports AD-MLP, STP3, Paddle, or changes the local OpenMMLab packages.
 """
 from copy import deepcopy
+import multiprocessing as mp
 import os
 import pickle
 
@@ -12,6 +13,7 @@ import torch
 
 from . import OPENOCC_DATASET, OPENOCC_TRANSFORMS
 from .dataset import NuScenesDataset
+from .utils import get_img2global
 
 
 def _pose(info):
@@ -50,10 +52,24 @@ class NuScenesSparseWorldTrajectoryDataset(NuScenesDataset):
     of the AD-MLP implementation and its optional dependencies.
     """
     def __init__(self, admlp_state_path, trajectory_path, future_steps=6,
-                 history_frames=4, **kwargs):
+                 history_frames=4, official_boundary_filter=False,
+                 history_keyframes_only=False, max_samples=None,
+                 single_future_training=False,
+                 forecast_curriculum_start_epoch=0,
+                 forecast_curriculum_epochs_per_horizon=1, **kwargs):
         super().__init__(**kwargs)
         self.future_steps = future_steps
         self.history_frames = history_frames
+        self.official_boundary_filter = bool(official_boundary_filter)
+        self.history_keyframes_only = bool(history_keyframes_only)
+        self.single_future_training = bool(single_future_training)
+        self.forecast_curriculum_start_epoch = int(
+            forecast_curriculum_start_epoch)
+        self.forecast_curriculum_epochs_per_horizon = max(
+            1, int(forecast_curriculum_epochs_per_horizon))
+        # Shared storage lets persistent DataLoader workers observe epoch
+        # changes made by the main training process.
+        self._shared_epoch = mp.Value('i', 0, lock=False)
         with open(admlp_state_path, 'rb') as handle:
             self.admlp_state = pickle.load(handle)
         with open(trajectory_path, 'rb') as handle:
@@ -92,13 +108,20 @@ class NuScenesSparseWorldTrajectoryDataset(NuScenesDataset):
                         'annotation pickle contains duplicate sample token: '
                         f'{token}')
                 self.annotation_by_token[token] = frame
+        candidate_keyframes = self.keyframes
+        if self.official_boundary_filter:
+            candidate_keyframes = self._official_protocol_keyframes(
+                candidate_keyframes)
         valid = []
-        for scene, index in self.keyframes:
+        for scene, index in candidate_keyframes:
             frames = self.scene_infos[scene]
-            if index < history_frames:
+            history_indices = self._history_indices(
+                frames, index, history_frames, self.history_keyframes_only)
+            if len(history_indices) != history_frames:
                 continue
-            if not all(all(name in frames[frame].get('data', {}) for name in self.sensor_types)
-                       for frame in range(index - history_frames, index + 1)):
+            if not all(all(name in frames[frame].get('data', {})
+                           for name in self.sensor_types)
+                       for frame in history_indices + [index]):
                 continue
             token = frames[index].get('token')
             if token not in self.trajectory_by_token or token not in self.admlp_state:
@@ -121,6 +144,30 @@ class NuScenesSparseWorldTrajectoryDataset(NuScenesDataset):
                 continue
             valid.append((scene, index))
         self.keyframes = valid
+        if max_samples is not None:
+            self.keyframes = self.keyframes[:int(max_samples)]
+
+    @staticmethod
+    def _official_protocol_keyframes(keyframes):
+        """Match upstream's five-past/seven-future scene boundary rule."""
+        by_scene = {}
+        for keyframe in keyframes:
+            by_scene.setdefault(keyframe[0], []).append(keyframe)
+        selected = []
+        for records in by_scene.values():
+            selected.extend(records[5:-7])
+        return selected
+
+    @staticmethod
+    def _history_indices(frames, index, count, keyframes_only):
+        indices = []
+        for previous in range(index - 1, -1, -1):
+            if keyframes_only and not frames[previous].get('token'):
+                continue
+            indices.append(previous)
+            if len(indices) == count:
+                break
+        return indices
 
     @staticmethod
     def _state_vector(record):
@@ -167,11 +214,25 @@ class NuScenesSparseWorldTrajectoryDataset(NuScenesDataset):
                     f'{future_token}') from exc
         return future_infos
 
+    def set_epoch(self, epoch):
+        self._shared_epoch.value = int(epoch)
+
+    def _training_horizon(self, item):
+        elapsed = (int(self._shared_epoch.value) -
+                   self.forecast_curriculum_start_epoch)
+        active = max(1, min(
+            self.future_steps,
+            elapsed // self.forecast_curriculum_epochs_per_horizon + 1))
+        return (int(item) + int(self._shared_epoch.value)) % active
+
     def __getitem__(self, item):
         scene, index = self.keyframes[item]
         frames = self.scene_infos[scene]
         info = deepcopy(frames[index])
         result = self.get_data_info(info, scene_token=scene, frame_index=index)
+        if result.get('history_context') is not None:
+            result['history_context']['keyframes_only'] = \
+                self.history_keyframes_only
         traj, state = self._trajectory_record(info.get('token', ''))
         if traj.shape[0] < self.future_steps:
             raise ValueError('trajectory annotation has fewer than future_steps entries')
@@ -179,16 +240,39 @@ class NuScenesSparseWorldTrajectoryDataset(NuScenesDataset):
         result['temporal_ego_states'] = torch.from_numpy(state)
         future_paths, transforms = [], []
         current_pose = _pose(info)
-        for future in self._future_infos(info.get('token', '')):
+        future_infos = self._future_infos(info.get('token', ''))
+        selected_horizon = None
+        if self.single_future_training and not self.test_mode:
+            selected_horizon = self._training_horizon(item)
+            future_infos = [future_infos[selected_horizon]]
+        for future in future_infos:
             future_paths.append(future['occ_path'])
             transforms.append(np.linalg.inv(current_pose) @ _pose(future))
         result['future_occ_paths'] = future_paths
+        result['future_img_filenames'] = []
+        result['future_native_ego2img'] = []
+        for future in future_infos:
+            result['future_img_filenames'].append([
+                os.path.join(self.data_path, future['data'][camera]['filename'])
+                for camera in self.sensor_types])
+            future_pose = _pose(future)
+            result['future_native_ego2img'].append([
+                np.linalg.inv(get_img2global(
+                    future['data'][camera]['calib'],
+                    future['data'][camera]['pose'])) @ future_pose
+                for camera in self.sensor_types])
         result['future_ego_to_current'] = np.stack(transforms).astype(np.float32)
+        if selected_horizon is not None:
+            result['future_horizon'] = torch.tensor(
+                selected_horizon, dtype=torch.long)
         if self.data_aug_conf is not None:
             result['aug_configs'] = self._sample_augmentation()
         for transform in self.pipeline:
             result = transform(result)
-        return {key: result[key] for key in self.return_keys}
+        output = {key: result[key] for key in self.return_keys}
+        if selected_horizon is not None:
+            output['future_horizon'] = result['future_horizon']
+        return output
 
 
 @OPENOCC_TRANSFORMS.register_module()

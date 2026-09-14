@@ -54,6 +54,7 @@ class OPUSSetLoss(nn.Module):
                  rare_weight=10.0, class_weights=None,
                  pc_range=(-40., -40., -1., 40., 40., 5.4),
                  chunk_size=1024, loss_mode='official_v1', empty_label=17,
+                 use_camera_mask_weights=True,
                  # Kept only so older configs construct successfully.  It is
                  # intentionally ignored in official_v1 mode.
                  lambda_cd=None, max_match_points=None):
@@ -73,6 +74,7 @@ class OPUSSetLoss(nn.Module):
         self.pc_range = tuple(pc_range)
         self.chunk_size = chunk_size
         self.empty_label = empty_label
+        self.use_camera_mask_weights = bool(use_camera_mask_weights)
         self.register_buffer(
             'class_weights',
             torch.as_tensor(class_weights if class_weights is not None else [],
@@ -147,6 +149,12 @@ class OPUSSetLoss(nn.Module):
             gt_valid = metas['opus_gt_valid'].to(pred_points[0].device).bool()
             gt_camera_valid = metas.get('opus_gt_camera_valid', gt_valid)
             gt_camera_valid = gt_camera_valid.to(pred_points[0].device).bool()
+        if not self.use_camera_mask_weights:
+            # Full-volume NoMask protocol: every occupied GT voxel receives
+            # the same hard-target weighting eligibility.  Merely setting the
+            # dataset's train_mask_type='none' is insufficient because the
+            # official OPUS loss otherwise still consumes camera visibility.
+            gt_camera_valid = torch.ones_like(gt_valid, dtype=torch.bool)
         if len(pred_points) != len(self.stage_weights):
             raise ValueError('stage_weights must match OPUS prediction stages')
 

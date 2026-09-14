@@ -403,6 +403,11 @@ class LoadMultiViewImageHistory(object):
             for prev_idx in range(frame_index - 1, -1, -1):
                 prev_info = scene_infos[scene_token][prev_idx]
 
+                # The Occ3D annotation interleaves camera sweeps with 0.5 s
+                # nuScenes keyframes. SparseWorld consumes prior keyframes.
+                if ctx.get('keyframes_only', False) and not prev_info.get('token'):
+                    continue
+
                 # Skip frame if any camera is missing
                 if not all(cam_type in prev_info.get('data', {}) for cam_type in sensor_types):
                     continue
@@ -449,6 +454,60 @@ class LoadMultiViewImageHistory(object):
         repr_str += f"color_type='{self.color_type}', "
         repr_str += f'to_float32={self.to_float32}, pad_history={self.pad_history})'
         return repr_str
+
+
+@OPENOCC_TRANSFORMS.register_module()
+class LoadMultiViewImageFuture(object):
+    """Append future images and native-future-ego camera projections."""
+
+    def __init__(self, num_future=6, num_cams=6, color_type='unchanged',
+                 to_float32=True):
+        self.num_future = int(num_future)
+        self.num_cams = int(num_cams)
+        self.color_type = color_type
+        self.to_float32 = bool(to_float32)
+
+    def __call__(self, results):
+        filenames = results.get('future_img_filenames', [])
+        selected = 'future_horizon' in results
+        required = 1 if selected else self.num_future
+        if len(filenames) < required:
+            raise ValueError(
+                f'expected {required} future frames, got {len(filenames)}')
+        if isinstance(results.get('lidar2img'), np.ndarray):
+            results['lidar2img'] = list(results['lidar2img'])
+        if isinstance(results.get('ego2img'), np.ndarray):
+            results['ego2img'] = list(results['ego2img'])
+        current_lidar = [matrix.copy() for matrix in results['lidar2img'][:self.num_cams]]
+        native_projections = results.get('future_native_ego2img')
+        if native_projections is None or len(native_projections) < required:
+            raise KeyError(
+                'future_native_ego2img is required for future teacher states')
+        for frame_index, frame_filenames in enumerate(filenames[:required]):
+            if len(frame_filenames) != self.num_cams:
+                raise ValueError('future frame does not contain all configured cameras')
+            for filename in frame_filenames:
+                image = mmcv.imread(filename, self.color_type)
+                if image is None:
+                    raise FileNotFoundError(filename)
+                if self.to_float32:
+                    image = image.astype(np.float32)
+                results['img'].append(image)
+            results['lidar2img'].extend([matrix.copy() for matrix in current_lidar])
+            projections = native_projections[frame_index]
+            if len(projections) != self.num_cams:
+                raise ValueError(
+                    'future frame does not contain all native ego projections')
+            results['ego2img'].extend(
+                [np.asarray(matrix, dtype=np.float32).copy()
+                 for matrix in projections])
+        results['num_future_frame'] = required
+        results['img_shape'] = [image.shape[:2] for image in results['img']]
+        return results
+
+    def __repr__(self):
+        return (f'{self.__class__.__name__}(num_future={self.num_future}, '
+                f'num_cams={self.num_cams}, to_float32={self.to_float32})')
 
 
 @OPENOCC_TRANSFORMS.register_module()

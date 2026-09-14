@@ -15,6 +15,24 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.dataloader import DataLoader
 
 
+def _loader_runtime_kwargs(config):
+    """Translate optional loader config without breaking zero-worker jobs."""
+    num_workers = int(config.get("num_workers", 0))
+    kwargs = dict(
+        batch_size=config["batch_size"],
+        num_workers=num_workers,
+        pin_memory=bool(config.get("pin_memory", True)),
+    )
+    # PyTorch rejects these options when multiprocessing is disabled.
+    if num_workers > 0:
+        kwargs["persistent_workers"] = bool(
+            config.get("persistent_workers", False))
+        prefetch_factor = config.get("prefetch_factor", None)
+        if prefetch_factor is not None:
+            kwargs["prefetch_factor"] = int(prefetch_factor)
+    return kwargs
+
+
 def get_dataloader(
     train_dataset_config, 
     val_dataset_config, 
@@ -40,12 +58,10 @@ def get_dataloader(
 
         val_dataset_loader = DataLoader(
             dataset=val_wrapper,
-            batch_size=val_loader["batch_size"],
             collate_fn=custom_collate_fn_temporal,
             shuffle=False,
             sampler=val_sampler,
-            num_workers=val_loader["num_workers"],
-            pin_memory=True)
+            **_loader_runtime_kwargs(val_loader))
 
         return None, val_dataset_loader
 
@@ -61,23 +77,25 @@ def get_dataloader(
         else:
             train_sampler = DistributedSampler(train_wrapper, **train_sampler_config)
         val_sampler = DistributedSampler(val_wrapper, **val_sampler_config)
+    elif iter_resume:
+        # Use the same resumable sampler on one GPU.  Previously last_iter was
+        # only added to the displayed counter while data restarted at item 0.
+        train_sampler = CustomDistributedSampler(
+            train_wrapper, num_replicas=1, rank=0,
+            **train_sampler_config)
 
     train_dataset_loader = DataLoader(
         dataset=train_wrapper,
-        batch_size=train_loader["batch_size"],
         collate_fn=custom_collate_fn_temporal,
-        shuffle=False if dist else train_loader["shuffle"],
+        shuffle=False if train_sampler is not None else train_loader["shuffle"],
         sampler=train_sampler,
-        num_workers=train_loader["num_workers"],
-        pin_memory=True)
+        **_loader_runtime_kwargs(train_loader))
     val_dataset_loader = DataLoader(
         dataset=val_wrapper,
-        batch_size=val_loader["batch_size"],
         collate_fn=custom_collate_fn_temporal,
         shuffle=False,
         sampler=val_sampler,
-        num_workers=val_loader["num_workers"],
-        pin_memory=True)
+        **_loader_runtime_kwargs(val_loader))
 
     return train_dataset_loader, val_dataset_loader
 

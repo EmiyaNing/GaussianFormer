@@ -3,3 +3,6 @@ from .bev_segmentor import BEVSegmentor
 from .opus_segmentor import OPUSSegmentor
 from .sparseworld_traj_segmentor import SparseWorldTrajSegmentor
 from .sparseworld_strict_segmentor import SparseWorldStrictSegmentor
+from .official_opus_v2_segmentor import OfficialOPUSV2Segmentor
+from .forecasting_sparseworld_segmentor import ForecastingSparseWorld
+from .sparse_latent_world_segmentor import SparseLatentWorld
