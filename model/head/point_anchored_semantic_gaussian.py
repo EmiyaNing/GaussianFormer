@@ -31,7 +31,8 @@ class PointAnchoredSemanticGaussian(nn.Module):
     def __init__(self, embed_dims, num_children, num_classes, pc_range,
                  scale_range=((.1, .1, .1), (.6, .6, .6)),
                  initial_scale=.35, initial_opacity=.02, num_neighbors=8,
-                 include_self=True, query_chunk_size=256):
+                 include_self=True, query_chunk_size=256,
+                 freeze_geometry=False):
         super().__init__()
         self.embed_dims = int(embed_dims)
         self.num_children = int(num_children)
@@ -39,6 +40,7 @@ class PointAnchoredSemanticGaussian(nn.Module):
         self.num_neighbors = int(num_neighbors)
         self.include_self = bool(include_self)
         self.query_chunk_size = int(query_chunk_size)
+        self.freeze_geometry = bool(freeze_geometry)
         self.register_buffer('pc_lower', torch.tensor(pc_range[:3], dtype=torch.float32))
         self.register_buffer('pc_upper', torch.tensor(pc_range[3:], dtype=torch.float32))
         self.register_buffer('scale_min', torch.tensor(scale_range[0], dtype=torch.float32))
@@ -65,6 +67,17 @@ class PointAnchoredSemanticGaussian(nn.Module):
         # the base classifier at warm start.
         nn.init.zeros_(self.residual_head.weight)
         nn.init.zeros_(self.residual_head.bias)
+        if self.freeze_geometry:
+            # P1's A4 control: the Gaussian *kernel form* with a single global
+            # geometry instead of a per-point one.  Both heads are zero-weighted,
+            # so freezing the weight removes the input-dependent term and every
+            # point shares one scale (per axis) and one opacity -- but the biases
+            # remain trainable, so the shared geometry is still *learned* (at
+            # epoch 40: 0.403/0.405/0.407 per axis, opacity 0.0186).  A5 vs A4
+            # therefore isolates the *per-point* parameterisation, not
+            # "learnable vs frozen": see P1-7.
+            self.scale_head.weight.requires_grad_(False)
+            self.opacity_head.weight.requires_grad_(False)
 
     def _predict_attributes(self, token, points, query_valid_mask,
                             point_valid_mask=None):
@@ -155,7 +168,7 @@ class PointAnchoredSemanticGaussianCUDA(PointAnchoredSemanticGaussian):
     """Point-anchored attributes with fused sparse CUDA local aggregation."""
 
     def __init__(self, *args, cell_size=1.8, support_sigma=3., scale_eps=1e-4,
-                 denom_eps=1e-6, **kwargs):
+                 denom_eps=1e-6, max_neighbours=0, **kwargs):
         super().__init__(*args, **kwargs)
         self.pc_range = tuple(
             torch.cat((self.pc_lower, self.pc_upper)).tolist())
@@ -163,6 +176,12 @@ class PointAnchoredSemanticGaussianCUDA(PointAnchoredSemanticGaussian):
         self.support_sigma = float(support_sigma)
         self.scale_eps = float(scale_eps)
         self.denom_eps = float(denom_eps)
+        # Density cap. 0 keeps the original behaviour of aggregating every
+        # Gaussian inside the per-axis support box, which is the only setting
+        # validated for accuracy. A positive value bounds the accepted
+        # neighbours per query (nearest cell shells first) and is what makes
+        # clustered point sets affordable; see the P0 density-cap report.
+        self.max_neighbours = int(max_neighbours)
         self.max_scale = float(self.scale_max.max())
 
     def forward(self, token, points, query_valid_mask, point_valid_mask=None):
@@ -176,6 +195,6 @@ class PointAnchoredSemanticGaussianCUDA(PointAnchoredSemanticGaussian):
             values['opacities'].float(), values['seed'].float(),
             values['valid_mask'], self.pc_range, self.cell_size,
             self.support_sigma, self.scale_eps, self.denom_eps,
-            self.include_self, self.max_scale)
+            self.include_self, self.max_scale, self.max_neighbours)
         values.pop('seed')
         return values

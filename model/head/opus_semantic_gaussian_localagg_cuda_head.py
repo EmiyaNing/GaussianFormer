@@ -28,7 +28,8 @@ class OPUSSemanticGaussianLocalAggCUDAHead(OPUSGaussianResidualHead):
                  gaussian_query_chunk_size=256, gaussian_cell_size=1.8,
                  gaussian_support_sigma=3.0, gaussian_scale_eps=1e-4,
                  gaussian_denom_eps=1e-6, ensemble_gamma=1.,
-                 eval_mode='ensemble', **kwargs):
+                 eval_mode='ensemble', gaussian_max_neighbours=0,
+                 gaussian_freeze_geometry=False, **kwargs):
         super().__init__(
             gaussian_scale_range=gaussian_scale_range,
             gaussian_initial_scale=gaussian_initial_scale,
@@ -36,7 +37,8 @@ class OPUSSemanticGaussianLocalAggCUDAHead(OPUSGaussianResidualHead):
             gaussian_num_neighbors=gaussian_num_neighbors,
             gaussian_include_self=gaussian_include_self,
             gaussian_query_chunk_size=gaussian_query_chunk_size,
-            ensemble_gamma=ensemble_gamma, eval_mode=eval_mode, **kwargs)
+            ensemble_gamma=ensemble_gamma, eval_mode=eval_mode,
+            gaussian_freeze_geometry=gaussian_freeze_geometry, **kwargs)
         # ``gaussian_num_neighbors`` remains accepted for config compatibility
         # with Phase A, but localagg uses scale-bounded spatial support rather
         # than a global fixed-K search.
@@ -47,4 +49,6 @@ class OPUSSemanticGaussianLocalAggCUDAHead(OPUSGaussianResidualHead):
             gaussian_include_self, gaussian_query_chunk_size,
             cell_size=gaussian_cell_size,
             support_sigma=gaussian_support_sigma, scale_eps=gaussian_scale_eps,
-            denom_eps=gaussian_denom_eps)
+            denom_eps=gaussian_denom_eps,
+            max_neighbours=gaussian_max_neighbours,
+            freeze_geometry=gaussian_freeze_geometry)

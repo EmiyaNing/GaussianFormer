@@ -28,7 +28,7 @@ class _SemanticGaussianLocalAgg(torch.autograd.Function):
     @staticmethod
     def forward(ctx, points, scales, opacities, semantic_seed, valid_mask,
                 pc_min, grid_x, grid_y, grid_z, cell_size, support_sigma, scale_eps,
-                denom_eps, include_self, max_scale):
+                denom_eps, include_self, max_scale, max_neighbours):
         # A query scans enough cells to retrieve every Gaussian whose largest
         # permitted support overlaps it.  This makes binning a candidate
         # acceleration structure rather than an approximation.
@@ -36,10 +36,12 @@ class _SemanticGaussianLocalAgg(torch.autograd.Function):
         residual, denominator = _C.forward(
             points, scales, opacities, semantic_seed, valid_mask, pc_min,
             grid_x, grid_y, grid_z, float(cell_size), float(support_sigma),
-            float(scale_eps), float(denom_eps), neighbour_cells, bool(include_self))
+            float(scale_eps), float(denom_eps), neighbour_cells,
+            bool(include_self), int(max_neighbours))
         ctx.grid_shape = (grid_x, grid_y, grid_z)
         ctx.params = (float(cell_size), float(support_sigma), float(scale_eps),
-                      float(denom_eps), neighbour_cells, bool(include_self))
+                      float(denom_eps), neighbour_cells, bool(include_self),
+                      int(max_neighbours))
         ctx.save_for_backward(points, scales, opacities, semantic_seed,
                               valid_mask, pc_min, residual, denominator)
         return residual
@@ -50,23 +52,23 @@ class _SemanticGaussianLocalAgg(torch.autograd.Function):
          residual, denominator) = ctx.saved_tensors
         grid_x, grid_y, grid_z = ctx.grid_shape
         (cell_size, support_sigma, scale_eps, denom_eps,
-         neighbour_cells, include_self) = ctx.params
+         neighbour_cells, include_self, max_neighbours) = ctx.params
         grad_scales, grad_opacities, grad_seed = _C.backward(
             grad_residual.contiguous(), points, scales, opacities, semantic_seed,
             valid_mask, pc_min, residual, denominator, grid_x, grid_y, grid_z,
             cell_size, support_sigma, scale_eps, denom_eps, neighbour_cells,
-            include_self)
+            include_self, max_neighbours)
         # points are an anchored geometry input for this branch; pc bounds,
         # bin parameters and the validity mask are non-differentiable.
         return (None, grad_scales, grad_opacities, grad_seed, None, None, None,
-                None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None, None)
 
 
 def semantic_gaussian_localagg(points, scales, opacities, semantic_seed,
                                valid_mask, pc_range, cell_size,
                                support_sigma=3.0, scale_eps=1e-4,
                                denom_eps=1e-6, include_self=True,
-                               max_scale=None):
+                               max_scale=None, max_neighbours=0):
     """Aggregate point-anchored semantic Gaussians with a fused CUDA operator.
 
     Args:
@@ -83,6 +85,13 @@ def semantic_gaussian_localagg(points, scales, opacities, semantic_seed,
         include_self: Whether a point's own Gaussian participates.
         max_scale: Static scale upper bound. Production heads pass it to avoid
             a device-to-host maximum reduction in the forward hot path.
+        max_neighbours: Density cap. ``0`` (default) keeps the original
+            behaviour of aggregating every Gaussian inside the support box and
+            is the only setting validated for accuracy.  A positive value
+            bounds the number of *accepted* neighbours per query, visiting cell
+            shells from the query's own cell outwards, which bounds the inner
+            loop on heavily clustered point sets.  Forward and backward apply
+            the identical selection rule, so gradients stay consistent.
 
     Returns:
         Point-aligned semantic residual logits, ``[B,G,C]`` float32 CUDA.
@@ -117,9 +126,11 @@ def semantic_gaussian_localagg(points, scales, opacities, semantic_seed,
         max_scale = float(scales.detach().amax())
     if max_scale <= 0:
         raise ValueError('max_scale must be positive')
+    if max_neighbours < 0:
+        raise ValueError('max_neighbours must be >= 0 (0 disables the cap)')
     pc_min = points.new_tensor(pc_range[:3], dtype=torch.float32)
     grid_x, grid_y, grid_z = _grid_shape(pc_range, cell_size)
     return _SemanticGaussianLocalAgg.apply(
         points.contiguous(), scales.contiguous(), opacities.contiguous(), semantic_seed.contiguous(),
         valid_mask.contiguous(), pc_min, grid_x, grid_y, grid_z, cell_size, support_sigma,
-        scale_eps, denom_eps, include_self, max_scale)
+        scale_eps, denom_eps, include_self, max_scale, int(max_neighbours))

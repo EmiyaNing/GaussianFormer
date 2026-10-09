@@ -6,4 +6,9 @@ from .opus_semantic_gaussian_localagg_cuda_head import OPUSSemanticGaussianLocal
 from .point_anchored_semantic_gaussian import (
     PointAnchoredSemanticGaussian, PointAnchoredSemanticGaussianCUDA)
 from .gaussian_opus_head import GaussianOPUSHead
+from .opus_v1_gaussian_head import OPUSV1GaussianHead
+from .opus_v1_gaussian_trainable_bias_head import OPUSV1GaussianTrainableBiasHead
+from .opus_v2_sparse_head import OPUSV2SparseHead
 from .sparseworld_strict_head import SparseWorldStrictHead
+from .ablations.knn_residual import KNNResidualAggregator
+from .ablations.dense_g2v_residual import DenseG2VResidualAggregator

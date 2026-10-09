@@ -375,7 +375,11 @@ def main(local_rank, args):
     strict_metric = None
     if cfg.get('sparseworld_strict_eval', False):
         from misc.sparseworld_strict_eval import SparseWorldStrictMetric
-        strict_metric = SparseWorldStrictMetric()
+        # Opt-in per-sample dump: without it a report can only quote one
+        # aggregate per variant and cannot produce a bootstrap interval.
+        strict_metric = SparseWorldStrictMetric(
+            per_sample_path=os.environ.get('DSH_EVAL_PER_SAMPLE') or None,
+            spatial_samples=int(os.environ.get('DSH_EVAL_SPATIAL_SAMPLES', '0')))
     elif cfg.dataset_name_flag == 'surroundocc':
         from misc.metric_util import MeanIoU
         miou_metric = MeanIoU(

@@ -4,6 +4,8 @@ The Gaussian centres are exactly the final OPUS points.  This module therefore
 implements a sparse, normalized Gaussian message-passing layer on the final
 point set rather than a dense voxel renderer.
 """
+import torch
+
 from mmengine.registry import MODELS
 
 from .opus_head import OPUSHead
@@ -28,7 +30,8 @@ class OPUSGaussianResidualHead(OPUSHead):
                  gaussian_initial_scale=.35, gaussian_initial_opacity=.02,
                  gaussian_num_neighbors=8, gaussian_include_self=True,
                  gaussian_query_chunk_size=256, ensemble_gamma=1.,
-                 eval_mode='ensemble', **kwargs):
+                 eval_mode='ensemble', gaussian_freeze_geometry=False,
+                 gaussian_aggregator=None, **kwargs):
         super().__init__(**kwargs)
         if not self.decoder_outputs_logits:
             raise ValueError('OPUSGaussianResidualHead requires decoder_outputs_logits=True')
@@ -36,11 +39,26 @@ class OPUSGaussianResidualHead(OPUSHead):
             raise ValueError('eval_mode must be opus, gaussian_refined, or ensemble')
         self.eval_mode = eval_mode
         self.ensemble_gamma = ensemble_gamma
-        self.gaussian = _PointAnchoredGaussianResidual(
-            self.embed_dims, self.point_multipliers[-1], self.num_classes,
-            self.pc_range, gaussian_scale_range, gaussian_initial_scale,
-            gaussian_initial_opacity, gaussian_num_neighbors, gaussian_include_self,
-            gaussian_query_chunk_size)
+        if gaussian_aggregator is None:
+            self.gaussian = _PointAnchoredGaussianResidual(
+                self.embed_dims, self.point_multipliers[-1], self.num_classes,
+                self.pc_range, gaussian_scale_range, gaussian_initial_scale,
+                gaussian_initial_opacity, gaussian_num_neighbors,
+                gaussian_include_self, gaussian_query_chunk_size,
+                freeze_geometry=gaussian_freeze_geometry)
+        else:
+            # A1--A3 reuse the exact OPUS fusion contract and change only this
+            # aggregation module.  Defaults are filled here so every config
+            # needs to name only the intended operator difference.
+            aggregator = dict(gaussian_aggregator)
+            aggregator.setdefault('embed_dims', self.embed_dims)
+            aggregator.setdefault('num_children', self.point_multipliers[-1])
+            aggregator.setdefault('num_classes', self.num_classes)
+            aggregator.setdefault('pc_range', self.pc_range)
+            aggregator.setdefault('num_neighbors', gaussian_num_neighbors)
+            aggregator.setdefault('include_self', gaussian_include_self)
+            aggregator.setdefault('query_chunk_size', gaussian_query_chunk_size)
+            self.gaussian = MODELS.build(aggregator)
 
     def forward(self, representation, metas=None, **kwargs):
         output = super().forward(representation, metas, **kwargs)
