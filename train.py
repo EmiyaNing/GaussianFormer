@@ -84,7 +84,7 @@ def main(local_rank, args):
     seed = cfg.get('seed', 42) if args.seed is None else args.seed
     set_random_seed(seed)
     torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = cfg.get('cudnn_benchmark', True)
 
     # init DDP
     if args.gpus > 1:
@@ -122,6 +122,9 @@ def main(local_rank, args):
     logger = MMLogger('selfocc', log_file=log_file)
     MMLogger._instance_dict['selfocc'] = logger
     logger.info(f'Config:\n{cfg.pretty_text}')
+    logger.info(f'Runtime cuDNN benchmark: {torch.backends.cudnn.benchmark}')
+    logger.info('CUDA allocator configuration: ' + str(
+        os.environ.get('PYTORCH_ALLOC_CONF', os.environ.get('PYTORCH_CUDA_ALLOC_CONF', 'default'))))
 
     # build model
     import model
@@ -380,6 +383,19 @@ def main(local_rank, args):
             time_e = time.time()
 
             global_iter += 1
+            memory_log_interval = cfg.get('cuda_memory_log_interval', 0)
+            if memory_log_interval and i_iter % memory_log_interval == 0 and local_rank == 0:
+                memory_stats = torch.cuda.memory_stats()
+                logger.info(
+                    '[CUDA_MEMORY] epoch=%d iter=%d allocated=%.1f MiB reserved=%.1f MiB '
+                    'peak_allocated=%.1f MiB peak_reserved=%.1f MiB inactive_split=%.1f MiB '
+                    'alloc_retries=%d benchmark=%s',
+                    epoch, i_iter, torch.cuda.memory_allocated() / 2**20,
+                    torch.cuda.memory_reserved() / 2**20,
+                    torch.cuda.max_memory_allocated() / 2**20,
+                    torch.cuda.max_memory_reserved() / 2**20,
+                    memory_stats.get('inactive_split_bytes.all.current', 0) / 2**20,
+                    memory_stats.get('num_alloc_retries', 0), torch.backends.cudnn.benchmark)
             if i_iter % print_freq == 0 and local_rank == 0:
                 #lr = max([p['lr'] for p in optimizer.param_groups])
                 lr = optimizer.param_groups[0]['lr']
