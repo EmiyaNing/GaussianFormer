@@ -2,6 +2,7 @@ from .gaussian_encoder import *
 from .opus_encoder import OPUSEncoder, OfficialOPUSV1Encoder
 from .opus_v1_gaussian_encoder import OPUSV1GaussianEncoder
 from .opus_v1_gaussian_softplus_encoder import OPUSV1GaussianSoftplusEncoder
+from .opus_v1_gaussian_temporal_encoder import OPUSV1GaussianTemporalEncoder
 from .opus_v2_sparse_encoder import OPUSV2SparseEncoder
 from .gaussian_opus_encoder import GaussianOPUSEncoder
 from .gaussian_opus_v2_encoder import GaussianOPUSV2Encoder

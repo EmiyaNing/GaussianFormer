@@ -1,6 +1,7 @@
 from .base_segmentor import CustomBaseSegmentor
 from .bev_segmentor import BEVSegmentor
 from .opus_segmentor import OPUSSegmentor
+from .opus_temporal_segmentor import OPUSTemporalSegmentor
 from .frozen_opus_adapter import FrozenOPUSAdapterSegmentor
 from .sparseworld_strict import SparseWorldStrict
 from .sparse_gaussian_world import SparseGaussianWorld
