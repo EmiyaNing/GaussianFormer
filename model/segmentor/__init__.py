@@ -6,3 +6,4 @@ from .sparseworld_strict_segmentor import SparseWorldStrictSegmentor
 from .official_opus_v2_segmentor import OfficialOPUSV2Segmentor
 from .forecasting_sparseworld_segmentor import ForecastingSparseWorld
 from .sparse_latent_world_segmentor import SparseLatentWorld
+from .sparseworld_ffa_segmentor import SparseWorldFFASegmentor

@@ -40,18 +40,22 @@ class HungarianSparseMatcher:
         target_center = target['points_metric'].mean(2).float()
         pred_sem = predicted['semantic_logits'].float().log_softmax(-1)
         target_sem = target['semantic_logits'].float().softmax(-1)
-        pred_feat = F.normalize(predicted['query_feats'].float(), dim=-1)
-        target_feat = F.normalize(target['query_feats'].float(), dim=-1)
+        pred_feat = target_feat = None
+        if self.feature_weight:
+            pred_feat = F.normalize(predicted['query_feats'].float(), dim=-1)
+            target_feat = F.normalize(target['query_feats'].float(), dim=-1)
         pred_indices, target_indices, matched_costs = [], [], []
         for batch_index in range(pred_center.shape[0]):
             position = torch.cdist(
                 pred_center[batch_index], target_center[batch_index], p=1)
             semantic = -(target_sem[batch_index][None] *
                          pred_sem[batch_index][:, None]).sum(-1)
-            feature = 1. - pred_feat[batch_index] @ target_feat[batch_index].T
             cost = (self.position_weight * position +
-                    self.semantic_weight * semantic +
-                    self.feature_weight * feature)
+                    self.semantic_weight * semantic)
+            if self.feature_weight:
+                feature = (1. - pred_feat[batch_index] @
+                           target_feat[batch_index].T)
+                cost = cost + self.feature_weight * feature
             rows, cols = linear_sum_assignment(cost.cpu().numpy())
             rows = torch.as_tensor(rows, device=cost.device, dtype=torch.long)
             cols = torch.as_tensor(cols, device=cost.device, dtype=torch.long)

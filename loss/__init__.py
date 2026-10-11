@@ -12,4 +12,5 @@ from .sparseworld_trajectory_loss import SparseWorldTrajectoryLoss
 from .sparseworld_strict_loss import SparseWorldStrictLoss
 from .opus_v2_loss import OPUSV2Loss
 from .forecasting_sparseworld_loss import ForecastingSparseWorldLoss
+from .sparseworld_ffa_loss import SparseWorldFFALoss
 from .sparse_latent_world_loss import SparseLatentWorldLoss

@@ -68,3 +68,25 @@ def test_opus_set_loss_prefers_all_dense_nonempty_voxels_over_packed_targets():
     assert metrics['valid_gt_points'].item() == 2
     assert torch.isfinite(points.grad).all()
     assert logits.grad.abs().sum() > 0
+
+
+def test_opus_set_loss_nomask_is_invariant_to_camera_visibility():
+    loss_fn = OPUSSetLoss(
+        stage_weights=(1.0,), lambda_cls=0., lambda_pts=1.,
+        empty_dist_thr=.01, empty_weight=5., rare_classes=(),
+        use_camera_mask_weights=False, class_weights=[1, 1],
+        chunk_size=4, pc_range=(0., 0., 0., 2., 2., 2.))
+    points = torch.tensor([[[0.1, 0.1, 0.1], [1.8, 1.8, 1.8]]])
+    logits = torch.zeros(1, 2, 2)
+    common = {
+        'occ_xyz': torch.tensor([[[[[0.5, 0.5, 0.5]],
+                                    [[1.5, 1.5, 1.5]]]]]),
+        'occ_label': torch.tensor([[[[0], [1]]]])}
+    values = []
+    for camera_mask in (torch.zeros(1, 1, 2, 1, dtype=torch.bool),
+                        torch.ones(1, 1, 2, 1, dtype=torch.bool)):
+        value, _ = loss_fn({
+            'opus_pred_points': [points], 'opus_pred_logits': [logits],
+            'metas': dict(common, occ_cam_mask=camera_mask)})
+        values.append(value)
+    assert torch.allclose(values[0], values[1])
