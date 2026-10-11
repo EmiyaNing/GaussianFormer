@@ -21,6 +21,14 @@ class OPUSTemporalSegmentor(OPUSSegmentor):
         if image_amp_dtype not in ('bfloat16', 'float32'):
             raise ValueError('use bfloat16 or float32 image extraction')
         self.image_amp_dtype = image_amp_dtype
+        # mmseg ResNet's with_cp uses reentrant checkpointing. The backbone
+        # is shared by every camera/history chunk, so those inner checkpoints
+        # can fire DDP's parameter-ready hook multiple times in one backward.
+        # Own image recomputation exclusively at the non-reentrant chunk level.
+        # Set the flag on blocks too: changing only ResNet.with_cp is not enough.
+        for module in self.img_backbone.modules():
+            if hasattr(module, 'with_cp'):
+                module.with_cp = False
         self._memory_phase = None
         self._memory_samples = 0
 

@@ -14,7 +14,7 @@ batch_size = 1
 gradient_accumulation = 8
 cudnn_benchmark = False
 cuda_memory_log_interval = 50
-amp = False  # BF16 image extraction only; decoder, Gaussian head/loss FP32.
+amp = False  # BF16 image backbone only; FPN, decoder, Gaussian head/loss FP32.
 fail_on_nonfinite_grad = True
 grad_max_norm = 35
 warmup_iters = 4000  # 500 effective batch-8 updates on this single-GPU runner.
@@ -62,5 +62,8 @@ train_loader = dict(batch_size=1, num_workers=4, shuffle=True)
 val_loader = dict(batch_size=1, num_workers=4)
 model = dict(type='OPUSTemporalSegmentor', image_chunk_size=6,
              image_checkpoint=True, image_amp_dtype='bfloat16',
+             # Chunk checkpoints already cover the backbone. Avoid mmseg's
+             # reentrant block checkpoints on parameters shared across chunks.
+             img_backbone=dict(with_cp=False),
              encoder=dict(type='OPUSV1GaussianTemporalEncoder',
                           num_frames=8, decoder_checkpoint=True))
