@@ -9,6 +9,7 @@ from .dataset_flow import NuScenesFlowDataset, SceneStream
 from .sparseworld_strict import (NuScenesSparseWorldStrictDataset,
                                  LoadSparseWorldFutureOccupancy)
 from .transform_3d import *
+from .opus_temporal_history import LoadOPUSV1ImageHistory
 from .sampler import CustomDistributedSampler
 from .utils import custom_collate_fn_temporal
 
