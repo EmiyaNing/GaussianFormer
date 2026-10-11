@@ -49,7 +49,7 @@ class OPUSTemporalSegmentor(OPUSSegmentor):
 
     def _extract_chunk(self, images):
         # BF16 needs no loss scaling and its exponent range preserves small
-        # history gradients. Custom sampling/rendering still receive FP32.
+        # history gradients. Keep it confined to the image backbone.
         with torch.autocast(device_type=images.device.type, dtype=torch.bfloat16,
                             enabled=self.image_amp_dtype == 'bfloat16'):
             if self.freeze_img_backbone:
@@ -57,9 +57,14 @@ class OPUSTemporalSegmentor(OPUSSegmentor):
                     backbone = self.img_backbone(images)
             else:
                 backbone = self.img_backbone(images)
-            if isinstance(backbone, dict):
-                backbone = list(backbone.values())
-            features = [backbone[i] for i in self.img_backbone_out_indices]
+        if isinstance(backbone, dict):
+            backbone = list(backbone.values())
+        # Older PyTorch CUDA kernels do not implement nearest-neighbour
+        # upsampling for BF16. Casting only the neck inputs is insufficient
+        # under autocast: FPN's lateral convolutions would produce BF16 again.
+        # Run the entire neck in FP32, including checkpoint recomputation.
+        with torch.autocast(device_type=images.device.type, enabled=False):
+            features = [backbone[i].float() for i in self.img_backbone_out_indices]
             if self.freeze_img_neck:
                 with torch.no_grad():
                     features = self.img_neck(features)
