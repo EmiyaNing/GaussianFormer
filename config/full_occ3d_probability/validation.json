@@ -1,0 +1,279 @@
+{
+  "checked_at": "2026-10-19T23:05:07.796016+08:00",
+  "status": "passed",
+  "device": "NVIDIA GeForce RTX 4090",
+  "formal_training_started": false,
+  "scope": "Each size: static config/protocol checks, real full-dataset eight-frame sample, one forward/backward/AdamW step and one validation sample. Not a full accumulation cycle, epoch, convergence, sustained-memory, or DDP check.",
+  "sources": {
+    "config/full_occ3d_probability/_base_8f.py": "80e1b6f27de3067e27e61f0842b12fa71c8d1bcad29448ece065cafd9040b948",
+    "model/head/opus_gf2_probability_head.py": "ebf3fc4b6182640bdfd5d3b497eed94e449ff176409d05ad31cdac833b3468ab",
+    "model/head/gf2_probability_backend.py": "029f1e9730f45ce77c94966760b5b948537306783dc2539f1e62389e2d2c0adc",
+    "tools/train_opus_gaussian_8f.py": "0a43bbbcd7fc1a5246c22663941154d5357b1c8d20f01368a74e59bdbc980808"
+  },
+  "results": [
+    {
+      "size": "tiny",
+      "passed": true,
+      "train_samples": 28130,
+      "val_samples": 6019,
+      "config": "config/full_occ3d_probability/opusv1_gaussian_probability_tiny_8f.py",
+      "camera_mask_disabled": false,
+      "probability_normalized": true,
+      "no_empty_parameters": true,
+      "validation_loss": 120.24864196777344,
+      "image_shape": [
+        1,
+        48,
+        3,
+        256,
+        704
+      ],
+      "history_frame_indices": [
+        93,
+        89,
+        85,
+        81,
+        77,
+        73,
+        69,
+        65
+      ],
+      "validation_keyframe_indices": [
+        87,
+        81,
+        75,
+        69,
+        64,
+        58,
+        52
+      ],
+      "loss": [
+        135.93093872070312
+      ],
+      "full_train_step_seconds": [
+        0.936145024956204
+      ],
+      "train_peak": {
+        "allocated_mib": 3629.9560546875,
+        "reserved_mib": 3790.0
+      },
+      "val_peak": {
+        "allocated_mib": 2678.263671875,
+        "reserved_mib": 3790.0
+      },
+      "all_frame_feature_gradient_l1": [
+        0.09443436935544014,
+        0.09608211554586887,
+        0.08775498531758785,
+        0.09109360538423061,
+        0.09077445045113564,
+        0.09219687059521675,
+        0.10317545011639595,
+        0.09920749068260193
+      ],
+      "num_parameters": 78036028,
+      "queries": 600,
+      "final_gaussians": 76800,
+      "static_checks": "passed",
+      "config_sha256": "eacaef16f069065d02de3b201d5aafe3bdd4a65747c486b6a1de49a4b9e6f1f5"
+    },
+    {
+      "size": "small",
+      "passed": true,
+      "train_samples": 28130,
+      "val_samples": 6019,
+      "config": "config/full_occ3d_probability/opusv1_gaussian_probability_small_8f.py",
+      "camera_mask_disabled": false,
+      "probability_normalized": true,
+      "no_empty_parameters": true,
+      "validation_loss": 108.77816772460938,
+      "image_shape": [
+        1,
+        48,
+        3,
+        256,
+        704
+      ],
+      "history_frame_indices": [
+        93,
+        89,
+        85,
+        81,
+        77,
+        73,
+        69,
+        65
+      ],
+      "validation_keyframe_indices": [
+        87,
+        81,
+        75,
+        69,
+        64,
+        58,
+        52
+      ],
+      "loss": [
+        125.02777862548828
+      ],
+      "full_train_step_seconds": [
+        0.8315238390350714
+      ],
+      "train_peak": {
+        "allocated_mib": 3607.42919921875,
+        "reserved_mib": 3820.0
+      },
+      "val_peak": {
+        "allocated_mib": 2711.775390625,
+        "reserved_mib": 3820.0
+      },
+      "all_frame_feature_gradient_l1": [
+        0.07888285256922245,
+        0.08955780789256096,
+        0.08653004840016365,
+        0.09033050388097763,
+        0.09100238792598248,
+        0.09465955570340157,
+        0.09074201807379723,
+        0.09961210004985332
+      ],
+      "num_parameters": 74002068,
+      "queries": 1200,
+      "final_gaussians": 76800,
+      "static_checks": "passed",
+      "config_sha256": "894e6790021b8f18b043adef308ba841dbf7544fc9312500f80249a667d97a43"
+    },
+    {
+      "size": "middle",
+      "passed": true,
+      "train_samples": 28130,
+      "val_samples": 6019,
+      "config": "config/full_occ3d_probability/opusv1_gaussian_probability_middle_8f.py",
+      "camera_mask_disabled": false,
+      "probability_normalized": true,
+      "no_empty_parameters": true,
+      "validation_loss": 100.49347686767578,
+      "image_shape": [
+        1,
+        48,
+        3,
+        256,
+        704
+      ],
+      "history_frame_indices": [
+        93,
+        89,
+        85,
+        81,
+        77,
+        73,
+        69,
+        65
+      ],
+      "validation_keyframe_indices": [
+        87,
+        81,
+        75,
+        69,
+        64,
+        58,
+        52
+      ],
+      "loss": [
+        116.99986267089844
+      ],
+      "full_train_step_seconds": [
+        0.8948700089240447
+      ],
+      "train_peak": {
+        "allocated_mib": 3922.41650390625,
+        "reserved_mib": 4080.0
+      },
+      "val_peak": {
+        "allocated_mib": 2914.24560546875,
+        "reserved_mib": 4080.0
+      },
+      "all_frame_feature_gradient_l1": [
+        0.08895876631140709,
+        0.08316050097346306,
+        0.08147143572568893,
+        0.08630813006311655,
+        0.09065153449773788,
+        0.08794903010129929,
+        0.09462924860417843,
+        0.09355834685266018
+      ],
+      "num_parameters": 73598156,
+      "queries": 2400,
+      "final_gaussians": 76800,
+      "static_checks": "passed",
+      "config_sha256": "feae09cb424da3245df2b753aece8e9f84e23bc3f0de13a6ea8ce68b256e5992"
+    },
+    {
+      "size": "large",
+      "passed": true,
+      "train_samples": 28130,
+      "val_samples": 6019,
+      "config": "config/full_occ3d_probability/opusv1_gaussian_probability_large_8f.py",
+      "camera_mask_disabled": false,
+      "probability_normalized": true,
+      "no_empty_parameters": true,
+      "validation_loss": 90.56326293945312,
+      "image_shape": [
+        1,
+        48,
+        3,
+        256,
+        704
+      ],
+      "history_frame_indices": [
+        93,
+        89,
+        85,
+        81,
+        77,
+        73,
+        69,
+        65
+      ],
+      "validation_keyframe_indices": [
+        87,
+        81,
+        75,
+        69,
+        64,
+        58,
+        52
+      ],
+      "loss": [
+        108.73365783691406
+      ],
+      "full_train_step_seconds": [
+        1.0644762680167332
+      ],
+      "train_peak": {
+        "allocated_mib": 6202.3330078125,
+        "reserved_mib": 6418.0
+      },
+      "val_peak": {
+        "allocated_mib": 3506.84130859375,
+        "reserved_mib": 6418.0
+      },
+      "all_frame_feature_gradient_l1": [
+        0.11077357456088066,
+        0.10202703438699245,
+        0.10167070664465427,
+        0.10538591258227825,
+        0.10152484849095345,
+        0.10290108621120453,
+        0.11455297190696001,
+        0.1091538229957223
+      ],
+      "num_parameters": 73490220,
+      "queries": 4800,
+      "final_gaussians": 76800,
+      "static_checks": "passed",
+      "config_sha256": "53025730f1f9062aef110107aabbf2404b9cfa86e453d91400b150d5be23c902"
+    }
+  ]
+}

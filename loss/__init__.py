@@ -4,6 +4,7 @@ OPENOCC_LOSS = Registry('openocc_loss')
 from .multi_loss import MultiLoss
 from .occupancy_loss import OccupancyLoss
 from .opus_set_loss import OPUSSetLoss
+from .center_support_diagnostic_loss import CenterSupportDiagnosticSetLoss
 from .opus_v2_sparse_loss import OPUSV2SparseLoss
 from .occupancy_margin_loss import OccupancyMarginLoss, MultiLossWithMargin
 from .occupancy_class_aware_margin_loss import OccupancyClassAwareMarginLoss
