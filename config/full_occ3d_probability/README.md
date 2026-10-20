@@ -53,9 +53,11 @@ python3.10 -u tools/train_opus_gaussian_8f.py \
 
 ## 概率 CUDA 核的依赖
 
-当前后端沿用 mini 实验的本地 GF2 源码目录：`work_dirs/gf2_probability_decomposition/vendor/localagg_prob/`，首次构建的产物写入同级 `backend_build/`。迁移机器时需一起复制源码目录，并重新编译；仅复制这四个配置文件并不足以运行模型。运行环境同时需要项目原有的 `local_aggregate` 扩展。
+概率算子源码位于 `model/head/localagg_prob/`，与项目现有 `model/head/localagg/`、`localagg_react/` 保持相同目录结构。`model/head/gf2_probability_backend.py` 从该目录加载并编译；运行模型不再依赖 `work_dirs` 中的算子源码或旧实验初始化步骤。运行环境同时需要项目原有的 `local_aggregate` 扩展。
 
-后端默认编译架构是 RTX 4090 的 `8.9`。其他 GPU 应按实际计算能力设置 `TORCH_CUDA_ARCH_LIST` 环境变量，例如 A100 使用 `8.0`，避免沿用旧机器的二进制构建目录。
+首次调用会将编译产物写入 PyTorch 默认扩展缓存（通常在 `~/.cache/torch_extensions/`）。可通过 `TORCH_EXTENSIONS_DIR` 指定缓存位置。迁移机器时复制模型源码，并在目标机器重新编译即可，无需携带旧的构建产物。
+
+默认由 PyTorch 按可见 GPU 选择编译架构，也可以通过 `TORCH_CUDA_ARCH_LIST` 显式指定，例如 RTX 4090 使用 `8.9`，A100 使用 `8.0`。后端默认最多使用两个编译任务，可以通过 `MAX_JOBS` 调整。
 
 ## 已完成的检查
 
@@ -64,3 +66,5 @@ python3.10 -u tools/train_opus_gaussian_8f.py \
 同时逐项核对了与旧四尺寸配置的 encoder、query、Set loss、预训练权重和学习率调度设置，仅按上述说明改变渲染与 occupancy 损失输入方式。
 
 本次没有启动 30 epoch 正式训练。这些检查不能替代完整梯度累积周期、整轮验证、长时间显存稳定性或 DDP 检查。完整记录见同目录的 `validation.json`；原始检查日志位于 `work_dirs/full_occ3d_probability/preflight/`。
+
+算子迁入模型目录后，另用全新扩展缓存完成了独立编译，前向值和四组输入梯度均通过可微参考实现比对；Tiny 的真实 8 帧训练步与验证样本也重新通过。迁移记录位于 `work_dirs/full_occ3d_probability/preflight/backend_migration_source.json`，检查日志为同目录的 `backend_migration.log` 和 `backend_migration_tiny.log`。原有 `validation.json` 保留为迁移前四尺寸检查的历史记录。
