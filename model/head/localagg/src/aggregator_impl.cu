@@ -1,3 +1,4 @@
+#include <ATen/cuda/CUDAContext.h>
 /*
  * Copyright (C) 2023, Inria
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
@@ -190,11 +191,12 @@ int LocalAggregator::Aggregator::forward(
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
-	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug);
+	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P, at::cuda::getCurrentCUDAStream()), debug);
 
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;
-	CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
+	CHECK_CUDA(cudaMemcpyAsync(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost, at::cuda::getCurrentCUDAStream()), debug);
+	CHECK_CUDA(cudaStreamSynchronize(at::cuda::getCurrentCUDAStream()), debug);
 
 	size_t binning_chunk_size = required<BinningState>(num_rendered);
 	char* binning_chunkptr = binningBuffer(binning_chunk_size);
@@ -202,7 +204,7 @@ int LocalAggregator::Aggregator::forward(
 
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
-	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
+	duplicateWithKeys << <(P + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream() >> > (
 		P,
 		means3D_int,
 		geomState.point_offsets,
@@ -221,13 +223,13 @@ int LocalAggregator::Aggregator::forward(
 		binningState.sorting_size,
 		binningState.point_list_keys_unsorted, binningState.point_list_keys,
 		binningState.point_list_unsorted, binningState.point_list,
-		num_rendered, 0, 32 + bit), debug)
+		num_rendered, 0, 32 + bit, at::cuda::getCurrentCUDAStream()), debug)
 
-	CHECK_CUDA(cudaMemset(imgState.ranges, 0, H * W * D * sizeof(uint2)), debug);
+	CHECK_CUDA(cudaMemsetAsync(imgState.ranges, 0, H * W * D * sizeof(uint2), at::cuda::getCurrentCUDAStream()), debug);
 
 	// Identify start and end of per-tile workloads in sorted list
 	if (num_rendered > 0)
-		identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
+		identifyTileRanges << <(num_rendered + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream() >> > (
 			num_rendered,
 			binningState.point_list_keys,
 			imgState.ranges);
@@ -344,7 +346,7 @@ int LocalAggregator::Aggregator::inverse_render(
     dim3 grid(H, W, D);
 
     // Initialize voxel2pts to -1 (invalid)
-    CHECK_CUDA(cudaMemset(voxel2pts, -1, voxel2pts_size), debug);
+    CHECK_CUDA(cudaMemsetAsync(voxel2pts, -1, voxel2pts_size, at::cuda::getCurrentCUDAStream()), debug);
 
     // Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
     CHECK_CUDA(FORWARD::preprocess(
@@ -357,11 +359,12 @@ int LocalAggregator::Aggregator::inverse_render(
 
     // Compute prefix sum over full list of touched tile counts by Gaussians
     // E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
-    CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug);
+    CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P, at::cuda::getCurrentCUDAStream()), debug);
 
     // Retrieve total number of Gaussian instances to launch and resize aux buffers
     int num_rendered;
-    CHECK_CUDA(cudaMemcpy(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost), debug);
+    CHECK_CUDA(cudaMemcpyAsync(&num_rendered, geomState.point_offsets + P - 1, sizeof(int), cudaMemcpyDeviceToHost, at::cuda::getCurrentCUDAStream()), debug);
+    CHECK_CUDA(cudaStreamSynchronize(at::cuda::getCurrentCUDAStream()), debug);
 
     size_t binning_chunk_size = required<BinningState>(num_rendered);
     char* binning_chunkptr = binningBuffer(binning_chunk_size);
@@ -369,7 +372,7 @@ int LocalAggregator::Aggregator::inverse_render(
 
     // For each instance to be rendered, produce adequate [ tile | depth ] key
     // and corresponding duplicated Gaussian indices to be sorted
-    duplicateWithKeys << <(P + 255) / 256, 256 >> > (
+    duplicateWithKeys << <(P + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream() >> > (
         P,
         means3D_int,
         geomState.point_offsets,
@@ -388,13 +391,13 @@ int LocalAggregator::Aggregator::inverse_render(
         binningState.sorting_size,
         binningState.point_list_keys_unsorted, binningState.point_list_keys,
         binningState.point_list_unsorted, binningState.point_list,
-        num_rendered, 0, 32 + bit), debug)
+        num_rendered, 0, 32 + bit, at::cuda::getCurrentCUDAStream()), debug)
 
-    CHECK_CUDA(cudaMemset(imgState.ranges, 0, H * W * D * sizeof(uint2)), debug);
+    CHECK_CUDA(cudaMemsetAsync(imgState.ranges, 0, H * W * D * sizeof(uint2), at::cuda::getCurrentCUDAStream()), debug);
 
     // Identify start and end of per-tile workloads in sorted list
     if (num_rendered > 0)
-        identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
+        identifyTileRanges << <(num_rendered + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream() >> > (
             num_rendered,
             binningState.point_list_keys,
             imgState.ranges);

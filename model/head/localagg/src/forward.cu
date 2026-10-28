@@ -1,3 +1,4 @@
+#include <ATen/cuda/CUDAContext.h>
 #include "forward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
@@ -95,7 +96,7 @@ void FORWARD::render(
 	const float* semantic,
 	float* out)
 {
-	renderCUDA<NUM_CHANNELS> << <(N + 255) / 256, 256 >> > (
+	renderCUDA<NUM_CHANNELS> << <(N + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream() >> > (
 		N, 
 		pts,
 		points_int,
@@ -117,7 +118,7 @@ void FORWARD::preprocess(
 	const dim3 grid,
 	uint32_t* tiles_touched)
 {
-	preprocessCUDA << <(P + 255) / 256, 256 >> > (
+	preprocessCUDA << <(P + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream() >> > (
 		P,
 		points_xyz,
 		radii,

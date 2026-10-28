@@ -1,3 +1,4 @@
+#include <ATen/cuda/CUDAContext.h>
 #include "backward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
@@ -119,7 +120,7 @@ void BACKWARD::render(
 	float* semantics_grad,
 	float* cov3D_grad)
 {
-	renderCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
+	renderCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream() >> > (
 		P,
 		offsets,
 		point_list_keys_unsorted,
@@ -142,7 +143,7 @@ void BACKWARD::preprocess(
 	const dim3 grid,
 	int* voxel2pts)
 {
-	preprocessCUDA << <(N + 255) / 256, 256 >> > (
+	preprocessCUDA << <(N + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream() >> > (
 		N,
 		points_xyz,
 		grid,
@@ -224,7 +225,7 @@ void BACKWARD::inverse_render(
     const float* occupancy_gt,
     float* gaussian_semantic_mask)
 {
-    inverseRenderCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
+    inverseRenderCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256, 0, at::cuda::getCurrentCUDAStream() >> > (
         P,
         offsets,
         point_list_keys_unsorted,

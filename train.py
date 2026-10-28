@@ -293,6 +293,10 @@ def main(local_rank, args):
         exit(0)
     miou_metric.reset()
 
+    iter_checkpoint_interval = int(cfg.get('iter_checkpoint_interval', 50))
+    if iter_checkpoint_interval < 1:
+        raise ValueError('iter_checkpoint_interval must be positive')
+
     while epoch < max_num_epochs:
         my_model.train()
         if cfg.get('enable_model_set_epoch', False) and hasattr(raw_model, 'set_epoch'):
@@ -306,6 +310,8 @@ def main(local_rank, args):
         data_time_s = time.time()
         time_s = time.time()
         for i_iter, data in enumerate(train_dataset_loader):
+            if cfg.get('cuda_memory_log_interval', 0):
+                torch.cuda.reset_peak_memory_stats()
             if first_run:
                 i_iter = i_iter + last_iter
 
@@ -314,7 +320,7 @@ def main(local_rank, args):
 
             for k in list(data.keys()):
                 if isinstance(data[k], torch.Tensor):
-                    data[k] = data[k].cuda()
+                    data[k] = data[k].cuda(non_blocking=True)
             input_imgs = data.pop('img')            
             data_time_e = time.time()
 
@@ -383,19 +389,6 @@ def main(local_rank, args):
             time_e = time.time()
 
             global_iter += 1
-            memory_log_interval = cfg.get('cuda_memory_log_interval', 0)
-            if memory_log_interval and i_iter % memory_log_interval == 0 and local_rank == 0:
-                memory_stats = torch.cuda.memory_stats()
-                logger.info(
-                    '[CUDA_MEMORY] epoch=%d iter=%d allocated=%.1f MiB reserved=%.1f MiB '
-                    'peak_allocated=%.1f MiB peak_reserved=%.1f MiB inactive_split=%.1f MiB '
-                    'alloc_retries=%d benchmark=%s',
-                    epoch, i_iter, torch.cuda.memory_allocated() / 2**20,
-                    torch.cuda.memory_reserved() / 2**20,
-                    torch.cuda.max_memory_allocated() / 2**20,
-                    torch.cuda.max_memory_reserved() / 2**20,
-                    memory_stats.get('inactive_split_bytes.all.current', 0) / 2**20,
-                    memory_stats.get('num_alloc_retries', 0), torch.backends.cudnn.benchmark)
             if i_iter % print_freq == 0 and local_rank == 0:
                 #lr = max([p['lr'] for p in optimizer.param_groups])
                 lr = optimizer.param_groups[0]['lr']
@@ -415,11 +408,25 @@ def main(local_rank, args):
                 logger.info('[TRAIN][LossComponents] ' + detailed_loss)
                 loss_list = []
                 loss_component_history = {}
-            data_time_s = time.time()
-            time_s = time.time()
+            del result_dict, loss_input, loss, loss_dict, input_imgs, data
+            memory_log_interval = cfg.get('cuda_memory_log_interval', 0)
+            if memory_log_interval and i_iter % memory_log_interval == 0 and local_rank == 0:
+                memory_stats = torch.cuda.memory_stats()
+                logger.info(
+                    '[CUDA_MEMORY] after_cleanup epoch=%d iter=%d accumulation_pending=%d/%d '
+                    'allocated=%.1f MiB reserved=%.1f MiB '
+                    'peak_allocated=%.1f MiB peak_reserved=%.1f MiB inactive_split=%.1f MiB '
+                    'alloc_retries=%d benchmark=%s',
+                    epoch, i_iter, global_iter % grad_accumulation, grad_accumulation,
+                    torch.cuda.memory_allocated() / 2**20,
+                    torch.cuda.memory_reserved() / 2**20,
+                    torch.cuda.max_memory_allocated() / 2**20,
+                    torch.cuda.max_memory_reserved() / 2**20,
+                    memory_stats.get('inactive_split_bytes.all.current', 0) / 2**20,
+                    memory_stats.get('num_alloc_retries', 0), torch.backends.cudnn.benchmark)
 
             if args.iter_resume:
-                if (i_iter + 1) % 50 == 0 and local_rank == 0:
+                if (i_iter + 1) % iter_checkpoint_interval == 0 and local_rank == 0:
                     dict_to_save = {
                         'state_dict': raw_model.state_dict(),
                         'optimizer': optimizer.state_dict(),
@@ -433,6 +440,9 @@ def main(local_rank, args):
                     dst_file = osp.join(args.work_dir, 'latest.pth')
                     symlink(save_file_name, dst_file)
                     logger.info(f'iter ckpt {i_iter + 1} saved!')
+            # Checkpoint I/O must not be reported as next-batch data loading.
+            data_time_s = time.time()
+            time_s = time.time()
         
         # save checkpoint
         if local_rank == 0:
@@ -464,7 +474,7 @@ def main(local_rank, args):
             for i_iter_val, data in enumerate(val_dataset_loader):
                 for k in list(data.keys()):
                     if isinstance(data[k], torch.Tensor):
-                        data[k] = data[k].cuda()
+                        data[k] = data[k].cuda(non_blocking=True)
                 input_imgs = data.pop('img')
                 
                 with torch.cuda.amp.autocast(amp):
@@ -526,6 +536,7 @@ def main(local_rank, args):
                         detailed_loss.append(f'{loss_name}: {loss_value:.5f}')
                     detailed_loss = ', '.join(detailed_loss)
                     logger.info(detailed_loss)
+                del result_dict, loss_input, loss, loss_dict, input_imgs, data
                         
         miou, iou2 = miou_metric._after_epoch()
         if distributed:

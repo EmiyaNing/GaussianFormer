@@ -9,6 +9,7 @@ configurations:
 - `config/img_point_lite_react/img_voxel_react_occ3d.py`
 - `config/adaptive_allocation/adaptive_allocationv6_lite.py`
 - `config/opus/opusv1_t_r50_704x256_1f_occ3d.py`
+- `config/sparse_opus_gausisan_world/sparse_opus_gausisan_world_4096_1024_15e.py`
 
 Install the Python dependencies and the CUDA extensions in an environment
 compatible with CUDA, PyTorch, `spconv`, and `frnn`:
@@ -49,6 +50,18 @@ python visualize.py --py-config config/opus/opusv1_t_r50_704x256_1f_occ3d.py --w
 PyTorch fallback to keep the first training run bounded. Install and wire a
 GPU KNN backend from `requirements-opus.txt` before full 76,800-point matching
 experiments.
+
+## sparse_opus_gausisan_world
+
+The completed D model is integrated under the public name
+`sparse_opus_gausisan_world`. Its Gaussian perception, original SparseWorld
+rollout, balanced conditional semantic loss, standalone config, and per-epoch
+diagnostics live in the library without runtime imports from `experiments`.
+Original D checkpoints load with unchanged parameter names.
+
+Use the dedicated training/evaluation entry points to preserve D's 15-epoch
+protocol. See [the model and usage guide](docs/sparse_opus_gausisan_world.md)
+for commands, checkpoint compatibility, supervision horizons, and validation.
 
 ## SparseWorldStrict
 
