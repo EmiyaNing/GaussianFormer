@@ -7,8 +7,8 @@ import numpy as np
 def test_report_pipeline_with_zero_paired_difference(tmp_path,monkeypatch):
     import tools.report_gf2_probability_decomposition as report
     from tools.calibrate_empty_mechanism_stage2 import EDGES,NB
-    run=tmp_path/'run';run.mkdir();(tmp_path/'analysis').mkdir()
-    (tmp_path/'analysis/gf2_probability_decomposition_design.md').write_text('# Synthetic fixture\n')
+    run=tmp_path/'run';run.mkdir();(tmp_path/'analysis/probability_rendering').mkdir(parents=True)
+    (tmp_path/'analysis/probability_rendering/gf2_probability_decomposition_design.md').write_text('# Synthetic fixture\n')
     monkeypatch.setattr(report,'ROOT',tmp_path);monkeypatch.setattr(report,'RUN',run)
     monkeypatch.setattr(report,'audit',lambda:dict(synthetic_fixture=True))
     matrix=np.zeros((18,18),np.int64);matrix[0,0]=5;matrix[0,17]=2;matrix[17,0]=3;matrix[17,17]=90
@@ -48,4 +48,4 @@ def test_report_pipeline_with_zero_paired_difference(tmp_path,monkeypatch):
     np.testing.assert_allclose(summary['baseline']['rules']['joint']['foreground_final_accuracy']['value'],100*5/7)
     with (run/'performance.csv').open() as stream:assert len(list(csv.DictReader(stream)))==12
     assert (run/'figures/overview.png').exists()
-    assert '三项诊断均已完成' in (tmp_path/'analysis/gf2_probability_decomposition_results.md').read_text()
+    assert '三项诊断均已完成' in (tmp_path/'analysis/probability_rendering/gf2_probability_decomposition_results.md').read_text()

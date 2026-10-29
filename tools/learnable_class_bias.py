@@ -17,7 +17,7 @@ from tools.empty_decision_followup import RUN as CACHE
 from tools.eval_empty_decision_optimization import region_metrics, metrics
 
 RUN = ROOT/'work_dirs/learnable_class_bias'
-OUT = ROOT/'analysis/learnable_class_bias'
+OUT = ROOT/'analysis/empty_decision/class_bias'
 SHRINK = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
 OUT_COST = [0., 10., 100., 1000.]
 ALL_COST = [10., 100., 1000.]
@@ -26,7 +26,7 @@ SHIFTS = np.arange(-32, 33)/32
 
 
 def initialize():
-    RUN.mkdir(exist_ok=True); OUT.mkdir(exist_ok=True)
+    RUN.mkdir(exist_ok=True); OUT.mkdir(parents=True, exist_ok=True)
     path = RUN/'protocol.json'
     if path.exists(): return read(path)
     old = read(ORIGINAL/'protocol.json')

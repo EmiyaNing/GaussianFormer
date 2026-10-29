@@ -107,9 +107,9 @@ def artifacts():
     available = {file_sha256(p) for p in candidates+current if p.exists()}
     for value in execution_hashes:
         assert value in available,('Missing executed source snapshot',value)
-    files = [ROOT/'analysis/empty_decision_optimization_results.md',
-        ROOT/'analysis/empty_decision_optimization/all_operating_points.csv',
-        ROOT/'analysis/empty_decision_optimization/per_class_metrics.csv']
+    files = [ROOT/'analysis/empty_decision/optimization/empty_decision_optimization_results.md',
+        ROOT/'analysis/empty_decision/optimization/all_operating_points.csv',
+        ROOT/'analysis/empty_decision/optimization/per_class_metrics.csv']
     assert all(p.exists() for p in files)
     document = read(RUN/'document_validation.json')
     assert document['status'] == 'passed' and document['strictKatexErrors'] == 0 and document['missingLinks'] == 0

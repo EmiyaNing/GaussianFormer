@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORTS = ROOT / 'analysis/sparse_render_result'
+REPORTS = ROOT / 'analysis/sparse_render/results'
 RESULTS = ROOT / 'benchmarks/results'
 
 
@@ -1417,9 +1417,9 @@ def test_the_two_p1_designs_are_not_overstated_as_factorials():
     "missing cell of the 2x2" wording lived in the config and stage comments too.
     """
     import re
-    files = [ROOT / 'analysis/sparse_render_result/README.md',
-             ROOT / 'analysis/sparse_render_result/P1-6_multi_seed.md',
-             ROOT / 'analysis/sparse_render_result/P1-4_full_control_matrix.md',
+    files = [ROOT / 'analysis/sparse_render/results/README.md',
+             ROOT / 'analysis/sparse_render/results/P1-6_multi_seed.md',
+             ROOT / 'analysis/sparse_render/results/P1-4_full_control_matrix.md',
              ROOT / 'config/opus/ablations/p1_a4_fixed_gaussian.py',
              ROOT / 'benchmarks/p1/eval_matrix.py']
     text = '\n'.join(path.read_text(encoding='utf-8') for path in files)

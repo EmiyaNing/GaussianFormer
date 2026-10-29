@@ -105,7 +105,7 @@ def test_the_delivered_family_artifact_is_complete_and_matches_p1_4():
     assert min(adapters, key=lambda n: thin[n]) == 'a5_cap0'
     assert thin['a5_cap0'] == pytest.approx(6.418, abs=0.001)
 
-    text = (ROOT / 'analysis/sparse_render_result/P1-4_full_control_matrix.md'
+    text = (ROOT / 'analysis/sparse_render/results/P1-4_full_control_matrix.md'
             ).read_text(encoding='utf-8')
     for token in ('14.401', '6.73', '0.084', 'A2 KNN-8 最大值'):
         assert token in text, f'P1-4 lost {token!r}'

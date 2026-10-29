@@ -138,7 +138,7 @@ def cited_artifact_paths():
     pattern = re.compile(
         r'benchmarks/results/[A-Za-z0-9_]+\.(?:jsonl|json|pt)\b')
     cited = set()
-    for path in (ROOT / 'analysis/sparse_render_result').glob('*.md'):
+    for path in (ROOT / 'analysis/sparse_render/results').glob('*.md'):
         cited.update(pattern.findall(path.read_text(encoding='utf-8')))
     return sorted(cited)
 
@@ -174,7 +174,7 @@ def check_section_references(reports_dir=None):
     a document that only has §4 is a citation the reader cannot follow -- it was
     a real defect (P1-5 -> P4-7 §4.3) found when this check was first written.
     """
-    directory = reports_dir or (ROOT / 'analysis/sparse_render_result')
+    directory = reports_dir or (ROOT / 'analysis/sparse_render/results')
     total = 0
     bad = []
     for path in sorted(directory.glob('*.md')):
@@ -214,7 +214,7 @@ def check_script_references(reports_dir=None):
     exactly the paths that get renamed while the prose stays put, leaving the
     reader with a reproduction step they cannot follow.
     """
-    directory = reports_dir or (ROOT / 'analysis/sparse_render_result')
+    directory = reports_dir or (ROOT / 'analysis/sparse_render/results')
     total = 0
     missing = []
     for path in sorted(directory.glob('*.md')):
@@ -256,7 +256,7 @@ def check_data(sample):
 
 def report_contract_triggers():
     """Trigger artifacts promised by the README's pending-report contract."""
-    readme = ROOT / 'analysis/sparse_render_result/README.md'
+    readme = ROOT / 'analysis/sparse_render/results/README.md'
     if not readme.exists():
         return []
     triggers = []
@@ -365,7 +365,7 @@ def check_artifact_coverage(readme=None, reports_dir=None):
     already promised.
     """
     directory = pathlib.Path(reports_dir) if reports_dir else (
-        ROOT / 'analysis/sparse_render_result')
+        ROOT / 'analysis/sparse_render/results')
     text = (pathlib.Path(readme) if readme else directory / 'README.md'
             ).read_text(encoding='utf-8')
     for path in sorted(directory.glob('*.md')):

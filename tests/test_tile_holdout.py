@@ -107,7 +107,7 @@ def test_holdout_script_requires_holdout_data(tmp_path):
 
 
 def test_p4_10_reports_the_rejection_fractions_and_the_holdout_plan():
-    text = (ROOT / 'analysis/sparse_render_result/P4-10_tile_size_sweep.md'
+    text = (ROOT / 'analysis/sparse_render/results/P4-10_tile_size_sweep.md'
             ).read_text(encoding='utf-8')
     for token in ('26.0%', '54.8%', '77.2%', '0.32', '+28.0%',
                   'run_p4_tile_holdout.sh', '拒绝'):

@@ -57,18 +57,18 @@ def main():
         evaluated_models=len(MODELS),validation_frame_visits=1024*len(MODELS),
         primary_scene_bootstrap=1000,exploratory_factor_swaps=32*16,
         source_sha256=file_sha256(__file__),summary_sha256=file_sha256(RUN/'summary.json')))
-    design=ROOT/'analysis/empty_mechanism_stage3_design.md'
+    design=ROOT/'analysis/empty_mechanism/stage3/empty_mechanism_stage3_design.md'
     text=design.read_text().replace('状态：实验执行中。','状态：**完整末期训练、验证和统计已完成，完整性审计通过。**')
     design.write_text(text)
     for name in ['design','results']:
         with (RUN/f'document_{name}.log').open('w') as log:
             result=subprocess.run(['node','work_dirs/empty_mechanism_stage2/document_review/validate.js',
-                f'analysis/empty_mechanism_stage3_{name}.md'],cwd=ROOT,stdout=log,stderr=subprocess.STDOUT)
+                f'analysis/empty_mechanism/stage3/empty_mechanism_stage3_{name}.md'],cwd=ROOT,stdout=log,stderr=subprocess.STDOUT)
         if result.returncode:raise RuntimeError(f'Document validation failed: {name}')
     write_json(RUN/'closeout.json',dict(status='complete',at=datetime.now().astimezone().isoformat(),
         required_work_remaining=[],scope='Final-epoch intervention; full-history study recorded separately',
         audit_sha256=file_sha256(RUN/'completion_audit.json'),summary_sha256=file_sha256(RUN/'summary.json'),
-        documents=['analysis/empty_mechanism_stage3_design.md','analysis/empty_mechanism_stage3_results.md']))
+        documents=['analysis/empty_mechanism/stage3/empty_mechanism_stage3_design.md','analysis/empty_mechanism/stage3/empty_mechanism_stage3_results.md']))
     print(f'{len(checks)} integrity checks passed.')
 
 

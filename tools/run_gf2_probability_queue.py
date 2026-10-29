@@ -71,10 +71,10 @@ def main():
                 execute(['tools/eval_gf2_probability_decomposition.py','statistics','--model',model],f'statistics_{model}.log')
             execute(['tools/report_gf2_probability_decomposition.py'],'report.log')
             for name in ['design','results']:
-                execute(['node','work_dirs/empty_mechanism_stage2/document_review/validate.js',f'analysis/gf2_probability_decomposition_{name}.md'],f'document_{name}.log')
+                execute(['node','work_dirs/empty_mechanism_stage2/document_review/validate.js',f'analysis/probability_rendering/gf2_probability_decomposition_{name}.md'],f'document_{name}.log')
             status(status='complete')
             write(RUN/'closeout.json',dict(status='complete',required_work_remaining=[],
-                documents=['analysis/gf2_probability_decomposition_design.md','analysis/gf2_probability_decomposition_results.md']))
+                documents=['analysis/probability_rendering/gf2_probability_decomposition_design.md','analysis/probability_rendering/gf2_probability_decomposition_results.md']))
         except BaseException as error:
             status(status='failed',error=repr(error));raise
         finally:resume_history()

@@ -26,7 +26,7 @@ from tools.center_support_common import write_json, kernel_weights
 from tools.diagnose_opus_v1_gaussian import file_sha256
 
 RUN = ROOT / 'work_dirs/empty_decision_optimization'
-REPORT = ROOT / 'analysis/empty_decision_optimization'
+REPORT = ROOT / 'analysis/empty_decision/optimization'
 CONFIG = 'config/center_support_contribution1/a0_original.py'
 CHECKPOINT = 'work_dirs/center_support_contribution1/train/a0_original_seed928/epoch_5.pth'
 FEATURES = ['margin', 'x', 'y', 'z', 'range_xy', 'fg_top_gap', 'fg_entropy', 'log_fg_total', 'log_support']

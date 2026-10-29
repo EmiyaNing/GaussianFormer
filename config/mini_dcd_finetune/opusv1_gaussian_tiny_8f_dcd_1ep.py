@@ -1,0 +1,38 @@
+"""4096-frame one-epoch DCD geometry fine-tuning of the original 8f tiny."""
+_base_=['../full_occ3d_oups_guassian/opusv1_gaussian_softplus_learned_bias_tiny_8f.py']
+custom_imports=dict(imports=['loss.opus_set_dcd_loss'],allow_failed_imports=False)
+load_from='ckpts/opus_gaussian_8f_tiny.pth'
+train_load_from=load_from
+train_load_revise_keys=[]
+train_load_strict=True
+train_dataset_config=dict(imageset='data/mini_occ3d_4096_1024/train.pkl')
+val_dataset_config=dict(imageset='data/nuscenes_cam/nuscenes_infos_val_sweeps_occ.pkl')
+max_epochs=1
+seed=928
+gradient_accumulation=4
+optimizer=dict(optimizer=dict(lr=2e-5))
+finetune_base_lr=2e-5
+source_optimizer_base_lr=2e-4
+finetune_min_ratio=.1
+finetune_warmup_updates=100
+save_every_updates=128
+expected_train_frames=4096
+expected_train_scenes=698
+expected_val_frames=6019
+expected_val_scenes=150
+loss=dict(type='MultiLoss',loss_cfgs=[
+    dict(type='OPUSSetDCDLoss',stage_weights=[1.]*6,loss_mode='official_v1',
+         lambda_cls=2.,focal_gamma=2.,smooth_l1_beta=.2,lambda_pts=.5,
+         empty_dist_thr=.2,empty_weight=5.,rare_classes=[0,2,5,8],rare_weight=10.,
+         class_weights=[10,5,10,5,5,10,10,5,10,5,5,1,5,1,1,2,1],
+         pc_range=[-40.,-40.,-1.,40.,40.,5.4],chunk_size=1024,
+         dcd_alpha=1.,dcd_distance_unit=.4,dcd_density_power=1.,dcd_retain_gt_weights=True),
+    dict(type='OccupancyLoss',weight=1.,empty_label=17,num_classes=18,
+         use_focal_loss=False,use_dice_loss=False,balance_cls_weight=True,
+         multi_loss_weights=dict(loss_voxel_ce_weight=10.,loss_voxel_lovasz_weight=1.),
+         use_sem_geo_scal_loss=False,use_lovasz_loss=True,lovasz_ignore=17,
+         manual_class_weight=[1.01552756,1.06897009,1.30013094,1.07253735,
+             .94637502,1.10087012,1.26960524,1.06258364,1.189019,
+             1.06217292,1.00595144,.85706115,1.03923299,.90867526,
+             .8936431,.85486129,.8527829,.5]),
+])

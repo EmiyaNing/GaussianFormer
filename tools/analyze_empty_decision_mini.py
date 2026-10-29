@@ -21,7 +21,7 @@ import joblib
 from tools.center_support_common import write_json
 
 RUN = ROOT / 'work_dirs/empty_decision_mini'
-REPORT = ROOT / 'analysis/empty_decision_mini'
+REPORT = ROOT / 'analysis/empty_decision/mini'
 REGIONS = ['camera', 'camera_complement', 'all_valid']
 LABELS = dict(camera='camera 区域', camera_complement='camera mask 补集', all_valid='全空间')
 GROUPS = dict(margin=[0], position=[1, 2, 3, 4], support=[5, 6, 7, 8],

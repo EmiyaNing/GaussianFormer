@@ -5,7 +5,7 @@
 // straight from global memory, with no block-level cooperation.  Measured at
 // G=76,800 it runs at ~48% of peak DRAM bandwidth with traffic matching
 // ``pairs x 112 B``, i.e. cache absorbs little of the reuse (see
-// analysis/sparse_render_result/P4-2_block_g2v_bound.md).
+// analysis/sparse_render/results/P4-2_block_g2v_bound.md).
 //
 // This kernel mirrors what S2GO describes for its efficient G2V:
 //

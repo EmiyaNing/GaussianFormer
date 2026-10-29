@@ -74,12 +74,12 @@ def main():
     lines=['# Empty 机制验证：实时进度','',f'更新：{date}。','',message+'。','',
            '## 完整末期训练','', '| 条件 | 已完成更新 / 1024 | 状态 |','| --- | ---: | --- |']
     for name,r in late_progress.items():lines.append(f'| {name} | {r["steps"]} | {"完成" if r["complete"] else "执行中或待执行"} |')
-    lines+=['','[末期实验设计](empty_mechanism_stage3_design.md) · [末期结果报告](empty_mechanism_stage3_results.md)','',
+    lines+=['','[末期实验设计](stage3/empty_mechanism_stage3_design.md) · [末期结果报告](stage3/empty_mechanism_stage3_results.md)','',
             '## 从训练起点开始的五个 epoch 对照','', '| 条件 | 已完成训练帧次 / 20480 | 状态 |','| --- | ---: | --- |']
     for name,r in history_progress.items():lines.append(f'| {name} | {r["frames"]} | {"完成" if r["complete"] else "已取消，保留部分记录" if cancelled and r["frames"] else "已取消" if cancelled else "执行中或待执行"} |')
-    lines+=['','[全程实验设计](empty_mechanism_history_design.md) · [全程结果报告](empty_mechanism_history_results.md)','',
+    lines+=['','[全程实验设计](history/empty_mechanism_history_design.md) · [全程结果报告](history/empty_mechanism_history_results.md)','',
             '结果文件在正式训练、完整验证和配对统计完成后自动更新；执行中的阶段不作正式成因结论。','']
-    path=ROOT/'analysis/empty_mechanism_progress.md';temp=path.with_name(path.name+f'.{os.getpid()}.tmp');temp.write_text('\n'.join(lines));temp.replace(path)
+    path=ROOT/'analysis/empty_mechanism/empty_mechanism_progress.md';temp=path.with_name(path.name+f'.{os.getpid()}.tmp');temp.write_text('\n'.join(lines));temp.replace(path)
     print(json.dumps(out,ensure_ascii=False))
 
 

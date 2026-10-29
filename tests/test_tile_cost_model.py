@@ -180,7 +180,7 @@ def test_p4_10_numbers_match_the_sweep_artifact():
     assert ratios[2] == pytest.approx(1.95, abs=0.02)
     assert ratios[8] == pytest.approx(1.15, abs=0.02)
 
-    text = (ROOT / 'analysis/sparse_render_result/P4-10_tile_size_sweep.md'
+    text = (ROOT / 'analysis/sparse_render/results/P4-10_tile_size_sweep.md'
             ).read_text(encoding='utf-8')
     for token in ('1.454', '0.746', '0.858', '+30.5%', '1.95×', '1.15×',
                   'verified_tile_edge'):

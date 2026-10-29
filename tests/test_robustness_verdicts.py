@@ -153,13 +153,13 @@ def test_accepted_degree_sweep_numbers_are_re_derived():
         values = {r['accepted_degree_mean'] for r in cell_rows
                   if r['dist'] == row_dist}
         assert len(values) == 1
-    readme = (ROOT / 'analysis/sparse_render_result/README.md'
+    readme = (ROOT / 'analysis/sparse_render/results/README.md'
               ).read_text(encoding='utf-8')
     # The authoritative summary must carry the corrected scope too: candidates are
     # a step function of k, not "decided by max_scale alone".
     for token in ('1.50×–158×', '台阶函数', '6.35×', '25.8×'):
         assert token in readme, f'README summary lost {token!r}'
-    report_text = (ROOT / 'analysis/sparse_render_result/P4-8_robustness.md'
+    report_text = (ROOT / 'analysis/sparse_render/results/P4-8_robustness.md'
                    ).read_text(encoding='utf-8')
     for token in ('3.1', '226.49', '158.2', '构造使然', '25.8'):
         assert token in report_text, f'P4-8 lost {token!r}'
@@ -272,7 +272,7 @@ def test_every_knob_delta_is_inside_the_same_config_repeatability():
     # The strongest cell-axis statement the data supports: bitwise equality of
     # two different bin edges.
     assert stored['cell0p9'] == stored['cell3p6']
-    text = (ROOT / 'analysis/sparse_render_result/P4-8_robustness.md'
+    text = (ROOT / 'analysis/sparse_render/results/P4-8_robustness.md'
             ).read_text(encoding='utf-8')
     for token in ('逐位相同', '8.1', '14.31', '14.93', '0.03'):
         assert token in text, f'P4-8 lost {token!r}'

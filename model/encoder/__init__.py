@@ -1,5 +1,6 @@
 from .gaussian_encoder import *
 from .opus_encoder import OPUSEncoder, OfficialOPUSV1Encoder
+from .opus_voxel_fusion_encoder import OPUSVoxelFusionEncoder
 from .opus_v1_gaussian_encoder import OPUSV1GaussianEncoder
 from .opus_v1_gaussian_softplus_encoder import OPUSV1GaussianSoftplusEncoder
 from .opus_v1_gaussian_temporal_encoder import OPUSV1GaussianTemporalEncoder

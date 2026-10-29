@@ -206,7 +206,7 @@ def report(s):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.family':'Noto Sans CJK JP','axes.unicode_minus':False,'font.size':11})
-    assets=ROOT/'analysis/empty_mechanism_stage3';assets.mkdir(exist_ok=True)
+    assets=ROOT/'analysis/empty_mechanism/stage3';assets.mkdir(parents=True, exist_ok=True)
     fig,ax=plt.subplots(figsize=(8.5,4.8))
     for offset,mode,label,color in [(-.17,'native','原生决策','#4c78a8'),(.17,'matched','相同误占用率','#e09547')]:
         entries=[s['dominance'][n][mode]['rescue_fraction'] for n in ['S','E','SE']]
@@ -222,7 +222,7 @@ def report(s):
     fig.tight_layout();fig.savefig(assets/'rescue_fraction.png',dpi=180,bbox_inches='tight');plt.close(fig)
     text=f'''# 最终 empty 漏检的成因：第三阶段实验结果
 
-日期：2026-10-19。状态：**四组完整末期训练、六个模型的完整验证与配对统计均已完成。** [实验设计](empty_mechanism_stage3_design.md) · [全部派生数值](../work_dirs/empty_mechanism_stage3/all_conditions.csv)。
+日期：2026-10-19。状态：**四组完整末期训练、六个模型的完整验证与配对统计均已完成。** [实验设计](empty_mechanism_stage3_design.md) · [全部派生数值](../../../work_dirs/empty_mechanism_stage3/all_conditions.csv)。
 
 ## 1. 本轮结论
 
@@ -252,7 +252,7 @@ B0 的全部前景漏检为 **{all_misses} 个**，固定组占其中 **{100*bas
 
 {rescues}
 
-![固定基线漏检组：原生与相同误占用率下的正确救回比例](empty_mechanism_stage3/rescue_fraction.png)
+![固定基线漏检组：原生与相同误占用率下的正确救回比例](rescue_fraction.png)
 
 相同误占用率的主要救回区间，在每次场景重采样中重新计算 B0 误占用预算及干预模型的曲线阈值。没有将新增的错误前景预测计作救回。
 
@@ -280,7 +280,7 @@ B0 的全部前景漏检为 **{all_misses} 个**，固定组占其中 **{100*bas
 
 判据在处理组正式结果产生前固定：救回比例区间下界超过 50%；前景首选正确率差值区间下界不低于 −0.5 个百分点；最终前景语义正确率点估计不下降。若要支持超出工作点移动的主导作用，还需在同误占用比较中通过。
 
-联合阻断的原生判定为 **{'通过' if npass else '未通过'}**，同误占用判定为 **{'通过' if mpass else '未通过'}**。这里的 50% 是操作性判据，不是普遍定律。完整连续效果及单独路径、交互区间保存在[机器汇总](../work_dirs/empty_mechanism_stage3/summary.json)。
+联合阻断的原生判定为 **{'通过' if npass else '未通过'}**，同误占用判定为 **{'通过' if mpass else '未通过'}**。这里的 50% 是操作性判据，不是普遍定律。完整连续效果及单独路径、交互区间保存在[机器汇总](../../../work_dirs/empty_mechanism_stage3/summary.json)。
 
 末期阻断不能追溯消除前四个 epoch 已形成的参数状态。没有通过，只能限制该直接路径在本轮干预窗口中的解释力，不能证明它在训练早期或其他方法中不重要。通过也不意味着整个训练历史的残余错误都由它造成。
 
@@ -304,7 +304,7 @@ Set 干预覆盖六个分类阶段；CE 干预覆盖实际 occupancy-supervised 
 
 场景不确定性使用 150 个验证场景、1000 次配对重采样；没有做多重比较校正。历史原权重与前两阶段结果的校验值保持一致。
 
-实现：[训练与路径干预](../tools/empty_mechanism_stage3.py) · [完整验证与校准](../tools/eval_empty_mechanism_stage3.py) · [统计汇总](../tools/report_empty_mechanism_stage3.py)。协议：[训练协议](../work_dirs/empty_mechanism_stage3/protocol.json) · [执行补充](../work_dirs/empty_mechanism_stage3/execution_addendum.json) · [评价协议](../work_dirs/empty_mechanism_stage3/evaluation_protocol.json)。
+实现：[训练与路径干预](../../../tools/empty_mechanism_stage3.py) · [完整验证与校准](../../../tools/eval_empty_mechanism_stage3.py) · [统计汇总](../../../tools/report_empty_mechanism_stage3.py)。协议：[训练协议](../../../work_dirs/empty_mechanism_stage3/protocol.json) · [执行补充](../../../work_dirs/empty_mechanism_stage3/execution_addendum.json) · [评价协议](../../../work_dirs/empty_mechanism_stage3/evaluation_protocol.json)。
 
 ## 附录 C：输出因子交叉替换——检查训练中的补偿
 
@@ -322,15 +322,15 @@ Set 干预覆盖六个分类阶段；CE 干预覆盖实际 occupancy-supervised 
 
 这些行分摊的是两个模型的输出差异，不是训练损失的自然因果贡献。空间、幅度和 empty 的变化可能相互补偿；交换不同模型相同 query 槽位的输出，也不等于一个可直接训练的中间模型。因此，这一探索性分析不用于替代主救回实验或主导判据。
 
-重渲染终点的最大 margin 数值差为 {max_render_error:.2e}，合计类别预测差异为 {render_disagreements} 个体素。完整组合与校验见[输出因子分解](../work_dirs/empty_mechanism_stage3/mediation/summary.json)。从训练起点开始的更具体共享渲染层对照，另见[全程实验设计](empty_mechanism_history_design.md)。
+重渲染终点的最大 margin 数值差为 {max_render_error:.2e}，合计类别预测差异为 {render_disagreements} 个体素。完整组合与校验见[输出因子分解](../../../work_dirs/empty_mechanism_stage3/mediation/summary.json)。从训练起点开始的更具体共享渲染层对照，另见[全程实验设计](../history/empty_mechanism_history_design.md)。
 '''
-    (ROOT/'analysis/empty_mechanism_stage3_results.md').write_text(text)
+    (ROOT/'analysis/empty_mechanism/stage3/empty_mechanism_stage3_results.md').write_text(text)
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--report-only',action='store_true')
     a=parser.parse_args();s=read(RUN/'summary.json') if a.report_only else summarize();report(s)
-    print(ROOT/'analysis/empty_mechanism_stage3_results.md')
+    print(ROOT/'analysis/empty_mechanism/stage3/empty_mechanism_stage3_results.md')
 
 
 if __name__=='__main__':main()

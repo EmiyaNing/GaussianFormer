@@ -91,7 +91,7 @@ def stability(v):
 
 
 def exports(v):
-    OUT.mkdir(exist_ok=True)
+    OUT.mkdir(parents=True, exist_ok=True)
     with (OUT/'operating_points.csv').open('w',newline='') as f:
         writer=csv.DictWriter(f,fieldnames=['id','family','source','shift','fallback','budget','camera_mIoU','all_mIoU','complement_FPR']);writer.writeheader()
         for p in v['operating_points'].values():
@@ -163,7 +163,7 @@ def report(v,ci,stable):
     pair=ci['comparisons']['C5_eps0.005__minus__C1_eps0.005']
     lines=['# 可学习类别 Empty Bias：实验结果与解释','',
         '日期：2026-10-18。状态：**C0—C5 冻结模型阶段完成；未进行主模型联合训练。**','',
-        '设计见[实验设计](learnable_class_bias_experiment_design.md)，数学定义见[方法设计](../plans/semantic_gaussian_learnable_class_bias_design.md)。本轮使用同一个 5-epoch 主模型、4096 个训练帧与 1024 个验证帧。','',
+        '设计见[实验设计](learnable_class_bias_experiment_design.md)，数学定义见[方法设计](../../../plans/semantic_gaussian_learnable_class_bias_design.md)。本轮使用同一个 5-epoch 主模型、4096 个训练帧与 1024 个验证帧。','',
         '## 先看结论','',
         '**本轮没有得到 camera mIoU 稳定超过类别阈值搜索的学习方案；得到的是不同的空间质量折中。** 17 个参数能够通过梯度正常学习，但参数是否可学习，与学习目标是否适合当前评价指标是两个问题。','',
         f'- **交叉熵版本过于保守。** C2 再校准后的 camera mIoU 为 {value(c2):.4f}，同数据 C1 为 {value(c1):.4f}；补集 FPR 分别为 {value(c2,"camera_complement","empty_FPR"):.4f}% 和 {value(c1,"camera_complement","empty_FPR"):.4f}%，这不是等风险比较。',
@@ -212,12 +212,12 @@ def report(v,ci,stable):
     for row in ce['candidates']:lines.append(f'| {row["shrink"]:g} | {row["tune_candidate_ce"]:.8f} | {row["projected_gradient_max"]:.3g} |')
     config=read(RUN/'models'/f'{c5["source"]}.json')
     lines += ['', '更强收缩并未赢得本轮的调参交叉熵选择。C4／C5 沿用了同一系数，因此当前结果也不能证明“收缩＋指标优化”已得到充分有效的正则化收益。若继续研究，应将正则强度与目标选择的作用分开。','',
-        '![主工作点的类别偏置](learnable_class_bias/class_biases.png)','',
+        '![主工作点的类别偏置](class_biases.png)','',
         '纵轴为相对原生全局 bias 的额外修正。正值更容易释放前景，负值更容易保留 empty；C2 与 C3 基本重合。完整 17 类数值保留在 CSV。','',
         '### 3.2 全空间保护：不能把 C4 已有的折中算作新增贡献','',
         f'完整调参集上，C4 的全空间 mIoU 为 {c4["tuning"]["all_valid"]["mIoU"]:.4f}，C1 为 {c1["tuning"]["all_valid"]["mIoU"]:.4f}。C4 主工作点本身已满足 C5 的调参全空间下限，因此额外约束在该工作点没有强烈的筛选需求。',
         f'C5 训练内选中配置为：补集惩罚 {config["rho_out"]:g}、全空间惩罚 {config["rho_all"]:g}，从 C3 参数初始化；统一平移为 {c5["shift"]:+.5f}，**{"发生回退" if c5["fallback"] else "未回退"}**。验证的微小差异不足以支持独立的强贡献。','',
-        '![固定工作点的空间折中](learnable_class_bias/risk_tradeoff.png)','',
+        '![固定工作点的空间折中](risk_tradeoff.png)','',
         '各点均由训练内规则确定，连线只用于观察折中，不是验证集上重新搜索的最优曲线；空心圈表示 +0.5 点主预算。C2／C3 的风险远低于这些点，主表单独保留。','',
         '## 4. 场景重采样：有没有更稳定？','',
         '从 523 个拟合场景中有放回抽取 10 组数据，重新拟合；主模型、调参场景及验证场景不变。C3 固定主实验选中的收缩系数，C5 固定训练内选中的惩罚配置。以下为十次拟合后的验证指标均值与样本标准差。','',
@@ -227,7 +227,7 @@ def report(v,ci,stable):
         lines.append(f'| {family} | {s["camera"]["mean"]:.4f} ± {s["camera"]["std"]:.4f} | {s["all"]["mean"]:.4f} ± {s["all"]["std"]:.4f} | {s["risk"]["mean"]:.4f} ± {s["risk"]["std"]:.4f}% | {s["raw_mean_class_std"]:.6f} | {s["fallbacks"]}/10 |')
     lines += ['', '偏置标准差在统一再校准前计算，并对 17 类取平均。C2／C3 多类达到参数边界，其波动也受边界截断影响，不能把低波动自动归功于收缩。',
         '这些结果衡量拟合场景变化，不是十个独立主模型，也不是贝叶斯后验不确定性；本轮未重采样拟合 C1，不能据此宣称学习方案比 B2 更稳定。','',
-        '![拟合场景变化下的指标](learnable_class_bias/scene_stability.png)','',
+        '![拟合场景变化下的指标](scene_stability.png)','',
         '## 5. 类别变化与数值复核','',
         '### 5.1 C5 相对 C1 的 camera 损失集中在哪里？','',
         '| 类别 | camera IoU 变化 | 全空间 IoU 变化 | C1 额外 bias | C5 额外 bias |','|---|---:|---:|---:|---:|']
@@ -253,11 +253,11 @@ def report(v,ci,stable):
         '- 三项数值／行为测试通过；两个完整输入上的 GT／mask 不变性与缓存预测一致性通过。',
         '- 原生预测、历史类别 bias 计数、模型与工作点哈希及六事件恒等式通过独立审计。','',
         '相关文件：','',
-        '- [实验协议](../work_dirs/learnable_class_bias/protocol.json)、[冻结工作点](../work_dirs/learnable_class_bias/operating_points.json)、[完整验证结果](../work_dirs/learnable_class_bias/validation/summary.json)。',
-        '- [全部工作点 CSV](learnable_class_bias/operating_points.csv)、[逐类别 TP/FP/FN](learnable_class_bias/per_class.csv)、[17 类偏置参数](learnable_class_bias/class_biases.csv)。',
-        '- [场景配对区间](../work_dirs/learnable_class_bias/paired_scene_intervals.json)、[重采样统计](../work_dirs/learnable_class_bias/stability/results.json)、[分桶复核](../work_dirs/learnable_class_bias/proxy_diagnostics.json)。',
-        '- [原主模型损失口径](../work_dirs/learnable_class_bias/main_model_loss_context.json)、[官方 RayIoU](../work_dirs/learnable_class_bias/ray/summary.json)、[完整前向计时](../work_dirs/learnable_class_bias/benchmark.json)。',
-        '- [执行审计](../work_dirs/learnable_class_bias/completion_audit.json)、[测试日志](../work_dirs/learnable_class_bias/tests.log)。','',
+        '- [实验协议](../../../work_dirs/learnable_class_bias/protocol.json)、[冻结工作点](../../../work_dirs/learnable_class_bias/operating_points.json)、[完整验证结果](../../../work_dirs/learnable_class_bias/validation/summary.json)。',
+        '- [全部工作点 CSV](operating_points.csv)、[逐类别 TP/FP/FN](per_class.csv)、[17 类偏置参数](class_biases.csv)。',
+        '- [场景配对区间](../../../work_dirs/learnable_class_bias/paired_scene_intervals.json)、[重采样统计](../../../work_dirs/learnable_class_bias/stability/results.json)、[分桶复核](../../../work_dirs/learnable_class_bias/proxy_diagnostics.json)。',
+        '- [原主模型损失口径](../../../work_dirs/learnable_class_bias/main_model_loss_context.json)、[官方 RayIoU](../../../work_dirs/learnable_class_bias/ray/summary.json)、[完整前向计时](../../../work_dirs/learnable_class_bias/benchmark.json)。',
+        '- [执行审计](../../../work_dirs/learnable_class_bias/completion_audit.json)、[测试日志](../../../work_dirs/learnable_class_bias/tests.log)。','',
         '复现顺序如下；选择阶段在验证之前执行：','',
         '```bash','python3.10 tools/learnable_class_bias.py initialize','python3.10 tools/learnable_class_bias.py extract',
         'python3.10 tools/learnable_class_bias.py tuning','python3.10 tools/fit_learnable_class_bias.py fit',
@@ -266,12 +266,12 @@ def report(v,ci,stable):
         'python3.10 tools/eval_learnable_class_bias.py validate','python3.10 tools/audit_learnable_class_bias.py ray',
         'python3.10 tools/audit_learnable_class_bias.py benchmark','python3.10 tools/audit_learnable_class_bias.py invariance',
         'python3.10 tools/audit_learnable_class_bias.py completion','python3.10 tools/report_learnable_class_bias.py','```','']
-    (ROOT/'analysis/learnable_class_bias_experiment_results.md').write_text('\n'.join(lines))
+    (ROOT/'analysis/empty_decision/class_bias/learnable_class_bias_experiment_results.md').write_text('\n'.join(lines))
 
 
 if __name__=='__main__':
     assert read(RUN/'completion_audit.json')['status']=='complete'
-    v=read(RUN/'validation/summary.json');OUT.mkdir(exist_ok=True)
+    v=read(RUN/'validation/summary.json');OUT.mkdir(parents=True, exist_ok=True)
     ci=paired(v);stable=stability(v);proxy_diagnostics(v);exports(v);figures(v,stable);report(v,ci,stable)
-    write_json(RUN/'status.json',dict(status='complete',report='analysis/learnable_class_bias_experiment_results.md'))
-    print('Wrote analysis/learnable_class_bias_experiment_results.md')
+    write_json(RUN/'status.json',dict(status='complete',report='analysis/empty_decision/class_bias/learnable_class_bias_experiment_results.md'))
+    print('Wrote analysis/empty_decision/class_bias/learnable_class_bias_experiment_results.md')

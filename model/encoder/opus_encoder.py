@@ -407,7 +407,7 @@ def _opus_encode_points(points, pc_range):
 
 
 def _official_sampling_4d(sample_points, mlvl_feats, scale_weights, projection,
-                          image_wh, num_views, eps=1e-5):
+                          image_wh, num_views, eps=1e-5, align_scale_weights=False):
     """Official OPUS-V1 ``sampling_4d`` with batched image sizes.
 
     ``projection`` is ego-to-image here because the local Occ3D pipeline uses
@@ -452,7 +452,10 @@ def _official_sampling_4d(sample_points, mlvl_feats, scale_weights, projection,
     locations = locations.permute(0, 1, 3, 2, 4, 5, 6).reshape(
         batch * frames * groups, queries, points, 3).contiguous()
     weights = scale_weights.reshape(batch, queries, groups, frames, points, -1)
-    weights = weights.permute(0, 2, 3, 1, 4, 5).reshape(
+    # Existing reproduction configs retain the official G,T flattening. New
+    # fusion uses T,G, matching grouped feature rows and sampling locations.
+    order = (0, 3, 2, 1, 4, 5) if align_scale_weights else (0, 2, 3, 1, 4, 5)
+    weights = weights.permute(*order).reshape(
         batch * groups * frames, queries, points, -1).contiguous()
     sampled = msmv_sampling(mlvl_feats, locations, weights)
     channels = sampled.shape[2]

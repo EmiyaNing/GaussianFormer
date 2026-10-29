@@ -10,8 +10,8 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from tools.empty_mechanism_stage2 import RUN,read,write_json
 
-OUT=ROOT/"analysis/empty_mechanism_stage2_results.md"
-ASSETS=ROOT/"analysis/empty_mechanism_stage2"
+OUT=ROOT/"analysis/empty_mechanism/stage2/empty_mechanism_stage2_results.md"
+ASSETS=ROOT/"analysis/empty_mechanism/stage2"
 TEMPLATE=ROOT/"tools/report_templates/empty_mechanism_stage2_results.md"
 
 
@@ -149,7 +149,7 @@ def main():
     s=read(RUN/"summary.json")
     audit=read(RUN/"completion_audit.json")
     assert audit["status"]=="passed"
-    ASSETS.mkdir(exist_ok=True)
+    ASSETS.mkdir(parents=True, exist_ok=True)
     names={"B0":"原训练目标（B0）","B0_reference":"原损失接口参照",
            "B1":"删除末阶段 Set 分类","B2":"删除 CE empty","B3":"同时删除两项",
            "half_set":"Set 分类减半","project_set":"Set 幅度投影",

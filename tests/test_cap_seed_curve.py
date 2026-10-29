@@ -111,9 +111,9 @@ def test_seed42_costs_reproduce_the_published_curve_when_available():
     # The reports quote these costs in the rounded forms they use: P1-6 gives
     # the sequence ("cap=8 掉 0.26", "cap=32 只掉 0.05") and P1-1 states the
     # headline trade-off ("cap=32 用 −0.06 mIoU 换来 20.4x").
-    p1_6 = (ROOT / 'analysis/sparse_render_result/P1-6_multi_seed.md'
+    p1_6 = (ROOT / 'analysis/sparse_render/results/P1-6_multi_seed.md'
             ).read_text(encoding='utf-8')
-    p1_1 = (ROOT / 'analysis/sparse_render_result/P1-1_gaussian_vs_baseline_and_cap.md'
+    p1_1 = (ROOT / 'analysis/sparse_render/results/P1-1_gaussian_vs_baseline_and_cap.md'
             ).read_text(encoding='utf-8')
     assert '0.26' in p1_6 and '0.05' in p1_6, 'P1-6 lost the cap cost sequence'
     assert '−0.06' in p1_1, 'P1-1 lost the cap=32 headline cost'

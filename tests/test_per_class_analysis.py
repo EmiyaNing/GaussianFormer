@@ -121,7 +121,7 @@ def test_matched_k_is_not_matched_neighbours():
     assert payload['k'] == 8
     assert payload['mean_selection_overlap'] < 0.3, payload
     assert payload['mean_distance_shell_m'] > 2 * payload['mean_distance_knn_m'], payload
-    body = (ROOT / 'analysis/sparse_render_result/P1-6_multi_seed.md').read_text(encoding='utf-8')
+    body = (ROOT / 'analysis/sparse_render/results/P1-6_multi_seed.md').read_text(encoding='utf-8')
     assert '0.177' in body and '2.5' in body
     assert '未解决' in body, 'the report must state what remains unresolved'
 
@@ -172,7 +172,7 @@ def test_small_object_deficit_holds_for_every_a5_seed():
                        for name in ('a2_knn_mean', 'a2_s43')) / 2)
     assert large_gap == pytest.approx(0.04, abs=0.02)
 
-    text = (ROOT / 'analysis/sparse_render_result/P1-6_multi_seed.md').read_text(
+    text = (ROOT / 'analysis/sparse_render/results/P1-6_multi_seed.md').read_text(
         encoding='utf-8')
     for token in ('6.46', '6.61', '−0.15', '6.52', '6.64'):
         assert token in text, f'P1-6 lost the small-object token {token!r}'
@@ -218,7 +218,7 @@ def test_small_object_deficit_has_a_future_horizon_structure():
         else:
             assert max(a5) < min(a2), horizon
 
-    text = (ROOT / 'analysis/sparse_render_result/P1-6_multi_seed.md').read_text(
+    text = (ROOT / 'analysis/sparse_render/results/P1-6_multi_seed.md').read_text(
         encoding='utf-8')
     for token in ('+0.06', '−0.21', '−0.32', '−0.20', '未来帧'):
         assert token in text, f'P1-6 lost the horizon-structure token {token!r}'
@@ -260,7 +260,7 @@ def test_structural_classes_show_no_a5_difference_at_any_horizon():
         # Never a usable A5 advantage, never a deficit either.
         assert -0.05 <= gap <= 0.10, (horizon, gap)
 
-    text = (ROOT / 'analysis/sparse_render_result/P1-6_multi_seed.md').read_text(
+    text = (ROOT / 'analysis/sparse_render/results/P1-6_multi_seed.md').read_text(
         encoding='utf-8')
     assert '结构类' in text and '全部差异都落在细长类' in text
 
@@ -320,7 +320,7 @@ def test_every_adapters_gain_over_a0_is_concentrated_in_thin_classes():
     # And it is the only adapter that does not lose ground on structural classes.
     assert gains['A5'][1] > max(gains['A1'][1], gains['A2'][1], gains['A3'][1])
 
-    text = (ROOT / 'analysis/sparse_render_result/P1-6_multi_seed.md').read_text(
+    text = (ROOT / 'analysis/sparse_render/results/P1-6_multi_seed.md').read_text(
         encoding='utf-8')
     for token in ('+0.45', '+0.41', '+0.26', '+0.06', '的约 **63%**'):
         assert token in text, f'P1-6 lost the gain-decomposition token {token!r}'
@@ -377,7 +377,7 @@ def test_density_cap_damage_is_not_selective_unlike_the_gaussian_kernel():
     assert cap32_small - a0_small == pytest.approx(0.25, abs=0.02)
     assert cap32_large - uncapped_large == pytest.approx(-0.08, abs=0.02)
 
-    text = (ROOT / 'analysis/sparse_render_result/P1-6_multi_seed.md').read_text(
+    text = (ROOT / 'analysis/sparse_render/results/P1-6_multi_seed.md').read_text(
         encoding='utf-8')
     for token in ('不是选择性的', '−0.29', '−0.26', '+0.25'):
         assert token in text, f'P1-6 lost the cap-damage token {token!r}'

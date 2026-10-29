@@ -25,7 +25,7 @@ def refresh():
     if 'command' in state:rows+=['',f"当前命令：`{' '.join(state['command'])}`。"]
     if 'error' in state:rows+=['',f"失败信息：`{state['error']}`。保留现场后再修复，不能将中断训练当作完整轨迹。"]
     rows+=['','[实验设计](gf2_probability_decomposition_design.md) · [结果报告](gf2_probability_decomposition_results.md)。','']
-    path=ROOT/'analysis/gf2_probability_decomposition_progress.md';temp=path.with_suffix('.tmp');temp.write_text('\n'.join(rows));temp.replace(path)
+    path=ROOT/'analysis/probability_rendering/gf2_probability_decomposition_progress.md';temp=path.with_suffix('.tmp');temp.write_text('\n'.join(rows));temp.replace(path)
     return state['status']
 
 

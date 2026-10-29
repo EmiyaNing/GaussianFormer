@@ -2,7 +2,7 @@
 
 实验日期：2026-10-18。状态：**实验完成，完整性审计通过。** 本次修订重组解释与符号定义，实测数据沿用原实验记录。
 
-相关文档：[研究规则与完整符号表](../plans/semantic_gaussian_empty_mechanism_rules.md) · [实验设计与操作步骤](empty_mechanism_stage1_design.md) · [全部主实验条件](empty_mechanism_stage1/all_interventions.csv)
+相关文档：[研究规则与完整符号表](../../../plans/semantic_gaussian_empty_mechanism_rules.md) · [实验设计与操作步骤](empty_mechanism_stage1_design.md) · [全部主实验条件](all_interventions.csv)
 
 ## 1. 先说这份报告能回答什么
 
@@ -136,9 +136,9 @@ empty 分数使用差值比较，而非比值：漏检组高出 **+0.0101**，95
 
 三个 checkpoint 的完整更新区间均高于零；仅组成更新的区间均包含零。这支持幅度的局部作用，但两条路径不要求严格相加，也不能据此计算固定的“因果贡献百分比”。
 
-![输出干预：纵轴为漏检率变化，零线上方表示漏检增加](empty_mechanism_stage1/output_paths.png)
+![输出干预：纵轴为漏检率变化，零线上方表示漏检增加](output_paths.png)
 
-图中的“体素合计”是交叉熵加 Lovász，“联合目标”再加 Set 分类。图示使用同一相对输出步长；其他步长见[全部条件 CSV](empty_mechanism_stage1/all_interventions.csv)和[步长敏感性图](empty_mechanism_stage1/dose_response_epoch5.png)。
+图中的“体素合计”是交叉熵加 Lovász，“联合目标”再加 Set 分类。图示使用同一相对输出步长；其他步长见[全部条件 CSV](all_interventions.csv)和[步长敏感性图](dose_response_epoch5.png)。
 
 ### 4.3 更新实际分类参数：另一场景也出现相同路径
 
@@ -154,7 +154,7 @@ empty 分数使用差值比较，而非比值：漏检组高出 **+0.0101**，95
 
 将参数步长缩小到 0.00001，完整更新在三个阶段的独立场景中仍分别增加 +0.0988、+0.1352、+0.1167 个百分点，区间均高于零。说明这一方向并非只在较大的主步长出现。
 
-![参数干预：在未用于求梯度的场景评价相同路径](empty_mechanism_stage1/parameter_heldout_paths.png)
+![参数干预：在未用于求梯度的场景评价相同路径](parameter_heldout_paths.png)
 
 这一步支持“实际分类参数能够产生并传递这条局部路径”。它仍是一次局部更新，不等同于使用原优化器完成一次完整训练。
 
@@ -180,7 +180,7 @@ $$
 \sum_{\substack{c\in\mathcal C\\c\ne t_i}}\Delta s_{i,c}.
 $$
 
-等号右侧依次是目标类变化与其余 16 类的合计变化。该式是精确的加和关系，不依赖小步长近似；梯度形式及其符号解释放在[研究规则第 6 节](../plans/semantic_gaussian_empty_mechanism_rules.md)。
+等号右侧依次是目标类变化与其余 16 类的合计变化。该式是精确的加和关系，不依赖小步长近似；梯度形式及其符号解释放在[研究规则第 6 节](../../../plans/semantic_gaussian_empty_mechanism_rules.md)。
 
 ### 5.2 表中统计的是体素平均幅度，不是单个 Gaussian 的幅度
 
@@ -269,14 +269,14 @@ Gaussian 未归一化聚合与重叠已有相关讨论，见 [GaussianFormer-2 �
 
 | 计算环节 | 代码入口 |
 | --- | --- |
-| 原始 logits 转非负语义值 | [softplus encoder](../model/encoder/opus_v1_gaussian_softplus_encoder.py) |
-| Set 分类与最近邻匹配 | [OPUS set loss](../loss/opus_set_loss.py) |
-| 实际损失乘数与分类／几何拆分 | [diagnostic loss](../loss/center_support_diagnostic_loss.py) |
-| Gaussian 空间贡献加权求和 | [CUDA forward](../model/head/localagg/src/forward.cu) |
+| 原始 logits 转非负语义值 | [softplus encoder](../../../model/encoder/opus_v1_gaussian_softplus_encoder.py) |
+| Set 分类与最近邻匹配 | [OPUS set loss](../../../loss/opus_set_loss.py) |
+| 实际损失乘数与分类／几何拆分 | [diagnostic loss](../../../loss/center_support_diagnostic_loss.py) |
+| Gaussian 空间贡献加权求和 | [CUDA forward](../../../model/head/localagg/src/forward.cu) |
 
 ## 附录 C：数据与复现入口
 
-主协议、追加协议、逐帧记录和原执行快照位于[实验目录](../work_dirs/empty_mechanism_stage1/)。机器汇总见 [summary.json](../work_dirs/empty_mechanism_stage1/summary.json)，全部主干预条件见 [CSV](empty_mechanism_stage1/all_interventions.csv)。
+主协议、追加协议、逐帧记录和原执行快照位于[实验目录](../../../work_dirs/empty_mechanism_stage1/)。机器汇总见 [summary.json](../../../work_dirs/empty_mechanism_stage1/summary.json)，全部主干预条件见 [CSV](all_interventions.csv)。
 
 ~~~bash
 python3.10 tools/empty_mechanism_stage1.py initialize
@@ -291,4 +291,4 @@ python3.10 tools/report_empty_mechanism_stage1.py
 python3.10 tools/write_empty_mechanism_stage1_report.py
 ~~~
 
-本报告的说明文字保存在[报告模板](../tools/report_templates/empty_mechanism_stage1_results.md)，数值表由[生成脚本](../tools/write_empty_mechanism_stage1_report.py)读取原汇总生成，便于持续修订表达并保持数字一致。
+本报告的说明文字保存在[报告模板](../../../tools/report_templates/empty_mechanism_stage1_results.md)，数值表由[生成脚本](../../../tools/write_empty_mechanism_stage1_report.py)读取原汇总生成，便于持续修订表达并保持数字一致。

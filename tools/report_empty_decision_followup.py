@@ -14,7 +14,7 @@ from tools.empty_decision_followup import RUN,OLD,read,write_json
 from tools.eval_empty_decision_optimization import metrics,region_metrics
 from tools.diagnose_opus_v1_gaussian import CLASSES
 
-OUT=ROOT/'analysis/empty_decision_followup'
+OUT=ROOT/'analysis/empty_decision/followup'
 ORDER=['B0','B2','B2_shift','OldP3','H','Mix','Long','Balanced','Joint','Conditional','S','Support','Expanded','Safe']
 NAMES=dict(B0='原生全局 learnable bias',B2='冻结类别 bias',B2_shift='类别 bias 再校准',OldP3='上轮完整 P3',
     H='普通特征残差',Mix='原混合概率残差',Long='延长概率拟合',Balanced='区域平衡概率',Joint='六事件联合概率',
@@ -83,7 +83,7 @@ def ray_paired(validation,points):
 
 
 def export(validation,points):
-    OUT.mkdir(exist_ok=True)
+    OUT.mkdir(parents=True, exist_ok=True)
     with (OUT/'all_operating_points.csv').open('w',newline='') as f:
         writer=csv.DictWriter(f,fieldnames=['id','family','seed','budget','source','threshold','camera_mIoU','all_mIoU','complement_FPR','tuning_camera_mIoU','tuning_complement_FPR'])
         writer.writeheader()
@@ -162,7 +162,7 @@ def make_report(validation,points,bootstrap):
     lines=['# Empty 决策优化后续实验：原因验证与改进尝试','',
         '日期：2026-10-18。状态：**冻结模型阶段完成；未进行主模型联合训练。**','',
         '沿用 4096 帧 mini 训练集和 1024 帧验证集，冻结同一个 5-epoch 主模型。训练内划分、候选范围和全局 learnable bias 均沿用原实验。',
-        '本轮检验概率中间表示、区域目标、支持信息、扩大采样及正确前景撤回惩罚。设计见[实验设计](empty_decision_followup_design.md)，原问题解释见[上轮复盘](empty_decision_optimization_failure_analysis.md)。','',
+        '本轮检验概率中间表示、区域目标、支持信息、扩大采样及正确前景撤回惩罚。设计见[实验设计](empty_decision_followup_design.md)，原问题解释见[上轮复盘](../optimization/empty_decision_optimization_failure_analysis.md)。','',
         '**读表规则：** mIoU、IoU、AP、FPR 用百分数，差值用百分点；方法按同一训练预算选定，实际验证风险未必相同。超出 0.25 点容差时，不称为等风险比较。','',
         f'训练内选择的主工作点为 **{selection["training_selected_primary_id"]}**；该选择在本轮验证之前冻结。下文同时报告所有预设版本，不按验证结果回选部署方案。','']
     if (RUN/'interpretation.md').exists():lines += [(RUN/'interpretation.md').read_text().strip(),'']
@@ -174,7 +174,7 @@ def make_report(validation,points,bootstrap):
         p=points[family];v=p['validation'];r=oldray['models'][p['id']] if family=='OldP3' else ray['models'][p['id']]
         b=bench['models']['OldP3' if family=='OldP3' else p['id']]
         lines.append(f'| {family}：{NAMES[family]} | {v["camera"]["mIoU"]:.4f} | {v["all_valid"]["mIoU"]:.4f} | {v["camera_complement"]["empty_FPR"]:.4f}% | {v["camera"]["IoU"]:.4f} | {r["RayIoU"]:.4f} | {b["FPS"]:.2f} |')
-    lines += ['', '![预先冻结工作点的收益与风险](empty_decision_followup/risk_tradeoff.png)','',
+    lines += ['', '![预先冻结工作点的收益与风险](risk_tradeoff.png)','',
         '各预算都在训练内选择；连线用于展示折中，不是验证集上重新搜索的最优包络。B2_shift 获得与局部方法相同的统一阈值扫描机会。','',
         '## 2. 概率是否有独立贡献，支持是否有额外价值？','',
         '500 次场景级配对 bootstrap，150 个场景。区间条件于固定主模型、已拟合头及冻结工作点，不含重新训练或模型选择的不确定性。','',
@@ -195,7 +195,7 @@ def make_report(validation,points,bootstrap):
         pp=[p for p in validation['operating_points'].values() if p['family']==family and p['budget']==.005]
         values=[[p['validation'][region][key] for p in pp] for region,key in [('camera','mIoU'),('camera_complement','empty_FPR')]]
         lines.append('| '+family+' | '+' | '.join(f'{np.mean(v):.4f} ± {np.std(v,ddof=1):.4f}' for v in values)+' |')
-    lines += ['', '![三个模块种子的结果](empty_decision_followup/module_seeds.png)','',
+    lines += ['', '![三个模块种子的结果](module_seeds.png)','',
         '这些是三个局部头种子，共享同一个主模型；不能称为三个完整模型独立训练。','']
     if (RUN/'width_control/results.json').exists():
         width=read(RUN/'width_control/results.json')
@@ -235,7 +235,7 @@ def make_report(validation,points,bootstrap):
             full=validation['calibration'][name+'/'+variant];a,b=full['camera'],full['camera_complement']
             lines.append(f'| {PNAMES[name]} / {VNAMES[variant]} | {a["NLL"]:.4f} | {a["q_ECE"]*100:.2f}% | {row["camera"]["q"]["AP"]*100:.2f}% | {b["q_ECE"]*100:.2f}% | {row["complement"]["q"]["AP"]*100:.2f}% |')
     lines += ['',
-        '![分区域预测正确率与实际比例](empty_decision_followup/regional_probability.png)','',
+        '![分区域预测正确率与实际比例](regional_probability.png)','',
         '虚线为该区域候选中前景首选正确的实际比例。星号与红色标记仅为真实区域条件化的诊断统计；Conditional 的可部署推理同时接收两组预测条件概率，不使用真实分区来选分支。','',
         '**解释边界：** balanced 改变了目标区域比例；mask_oracle 读取真实分区，只是诊断参照。Joint 输入六个联合概率；Conditional 输入两组各自归一化的三结果概率，两个可部署版本均不读取真实 mask。延长或加宽拟合有助于排查限制，但有限训练仍不能证明已达最优。','']
     reference=selection['oracle_region_reference'];ids=list(validation['operating_points'])
@@ -297,19 +297,19 @@ def make_report(validation,points,bootstrap):
         'python3.10 tools/probe_empty_decision_followup.py eval','python3.10 tools/audit_empty_decision_followup.py ray',
         'python3.10 tools/audit_empty_decision_followup.py benchmark','python3.10 tools/audit_empty_decision_followup.py invariance',
         'python3.10 tools/audit_empty_decision_followup.py completion','python3.10 tools/report_empty_decision_followup.py','```','',
-        '- [本轮协议](../work_dirs/empty_decision_followup/protocol.json)与[冻结选择](../work_dirs/empty_decision_followup/operating_points.json)。',
-        '- [完整结果](../work_dirs/empty_decision_followup/validation/summary.json)、[概率训练内诊断](../work_dirs/empty_decision_followup/probability_training_metrics.json)和[验证概率 AP](../work_dirs/empty_decision_followup/probability_validation_metrics.json)。',
-        '- [支持信息诊断](../work_dirs/empty_decision_followup/support_probes_validation.json)、[场景级区间](../work_dirs/empty_decision_followup/scene_bootstrap.json)。',
-        '- [同宽补充对照](../work_dirs/empty_decision_followup/width_control/results.json)、[冻结网络的概率依赖诊断](../work_dirs/empty_decision_followup/decision_dependence.json)。',
-        '- [主实验全部工作点 CSV](empty_decision_followup/all_operating_points.csv)、[逐类别统计](empty_decision_followup/per_class_metrics.csv)；同宽补充点见上方独立结果。',
-        '- [测试日志](../work_dirs/empty_decision_followup/tests.log)、[文档渲染检查](../work_dirs/empty_decision_followup/document_validation.json)。',
-        '- [官方 RayIoU](../work_dirs/empty_decision_followup/ray/summary.json)、[推理计时](../work_dirs/empty_decision_followup/benchmark.json)、[完成审计](../work_dirs/empty_decision_followup/completion_audit.json)。','']
-    (ROOT/'analysis/empty_decision_followup_results.md').write_text('\n'.join(lines))
+        '- [本轮协议](../../../work_dirs/empty_decision_followup/protocol.json)与[冻结选择](../../../work_dirs/empty_decision_followup/operating_points.json)。',
+        '- [完整结果](../../../work_dirs/empty_decision_followup/validation/summary.json)、[概率训练内诊断](../../../work_dirs/empty_decision_followup/probability_training_metrics.json)和[验证概率 AP](../../../work_dirs/empty_decision_followup/probability_validation_metrics.json)。',
+        '- [支持信息诊断](../../../work_dirs/empty_decision_followup/support_probes_validation.json)、[场景级区间](../../../work_dirs/empty_decision_followup/scene_bootstrap.json)。',
+        '- [同宽补充对照](../../../work_dirs/empty_decision_followup/width_control/results.json)、[冻结网络的概率依赖诊断](../../../work_dirs/empty_decision_followup/decision_dependence.json)。',
+        '- [主实验全部工作点 CSV](all_operating_points.csv)、[逐类别统计](per_class_metrics.csv)；同宽补充点见上方独立结果。',
+        '- [测试日志](../../../work_dirs/empty_decision_followup/tests.log)、[文档渲染检查](../../../work_dirs/empty_decision_followup/document_validation.json)。',
+        '- [官方 RayIoU](../../../work_dirs/empty_decision_followup/ray/summary.json)、[推理计时](../../../work_dirs/empty_decision_followup/benchmark.json)、[完成审计](../../../work_dirs/empty_decision_followup/completion_audit.json)。','']
+    (ROOT/'analysis/empty_decision/followup/empty_decision_followup_results.md').write_text('\n'.join(lines))
 
 
 if __name__=='__main__':
     assert read(RUN/'completion_audit.json')['status']=='complete'
-    v=read(RUN/'validation/summary.json');p=primary(v);OUT.mkdir(exist_ok=True)
+    v=read(RUN/'validation/summary.json');p=primary(v);OUT.mkdir(parents=True, exist_ok=True)
     b=paired(v,p);ray_paired(v,p);export(v,p);figures(v,p);make_report(v,p,b)
-    write_json(RUN/'status.json',dict(status='complete',report='analysis/empty_decision_followup_results.md'))
-    print('Wrote analysis/empty_decision_followup_results.md')
+    write_json(RUN/'status.json',dict(status='complete',report='analysis/empty_decision/followup/empty_decision_followup_results.md'))
+    print('Wrote analysis/empty_decision/followup/empty_decision_followup_results.md')

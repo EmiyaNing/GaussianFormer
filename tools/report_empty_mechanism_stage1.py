@@ -7,7 +7,7 @@ import numpy as np
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from tools.empty_mechanism_stage1 import RUN,EPOCHS,read,write_json,file_sha256
 from tools.eval_empty_decision_optimization import metrics
-REPORT=ROOT/'analysis/empty_mechanism_stage1'
+REPORT=ROOT/'analysis/empty_mechanism/stage1'
 
 
 def arrays(outcomes):
@@ -236,7 +236,7 @@ def figures(summary):
 
 
 def main():
-    REPORT.mkdir(exist_ok=True);summary=dict(output={},parameters={},matched={},gradient_alignment={})
+    REPORT.mkdir(parents=True, exist_ok=True);summary=dict(output={},parameters={},matched={},gradient_alignment={})
     for epoch in EPOCHS:
         summary['output'][str(epoch)]={};summary['matched'][str(epoch)]={};summary['gradient_alignment'][str(epoch)]={}
         for split in ['train','val']:

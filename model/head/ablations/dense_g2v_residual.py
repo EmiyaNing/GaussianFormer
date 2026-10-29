@@ -2,7 +2,7 @@
 
 Plan reference: ``plans/sparse_render_plans/README.md`` section 5.3 ("faithful
 S2GO-style G2V") and the premise under test in
-``analysis/sparse_render_result/P3-1_whole_model_profile.md`` /
+``analysis/sparse_render/results/P3-1_whole_model_profile.md`` /
 ``P3-2_training_cost_probe.md``: *does materialising a dense ``V x C`` field
 actually dominate cost at the model level?*
 

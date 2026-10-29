@@ -45,11 +45,11 @@ def main():
             execute(['tools/empty_mechanism_history.py','statistics','--condition',name],f'statistics_{name}.log')
         execute(['tools/report_empty_mechanism_history.py'],'report.log')
         for name in ['design','results']:
-            execute(['node','work_dirs/empty_mechanism_stage2/document_review/validate.js',f'analysis/empty_mechanism_history_{name}.md'],f'document_{name}.log')
+            execute(['node','work_dirs/empty_mechanism_stage2/document_review/validate.js',f'analysis/empty_mechanism/history/empty_mechanism_history_{name}.md'],f'document_{name}.log')
         status(status='complete',training_epoch_runs=20,training_frame_visits=81920,optimizer_updates=20480)
         closeout=dict(status='complete',at=datetime.now().astimezone().isoformat(),
             required_work_remaining=[],audit=str((RUN/'completion_audit.json').relative_to(ROOT)),
-            documents=['analysis/empty_mechanism_history_design.md','analysis/empty_mechanism_history_results.md'])
+            documents=['analysis/empty_mechanism/history/empty_mechanism_history_design.md','analysis/empty_mechanism/history/empty_mechanism_history_results.md'])
         (RUN/'closeout.json').write_text(json.dumps(closeout,ensure_ascii=False,indent=2)+'\n')
 
 

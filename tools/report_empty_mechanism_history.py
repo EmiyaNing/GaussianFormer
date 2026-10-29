@@ -112,7 +112,7 @@ def main():
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.family':'Noto Sans CJK JP','axes.unicode_minus':False,'font.size':11})
-    assets=ROOT/'analysis/empty_mechanism_history';assets.mkdir(exist_ok=True)
+    assets=ROOT/'analysis/empty_mechanism/history';assets.mkdir(parents=True, exist_ok=True)
     fig,ax=plt.subplots(figsize=(8.5,4.8))
     for offset,mode,label,color in [(-.17,'native','原生决策','#4c78a8'),(.17,'matched','相同误占用率','#e09547')]:
         entries=[s['net_rescue'][n][mode] for n in ['S','E','SE']]
@@ -126,7 +126,7 @@ def main():
     fig.tight_layout();fig.savefig(assets/'net_rescue.png',dpi=180,bbox_inches='tight');plt.close(fig)
     text=f'''# empty 偏置的全程因果对照：实验结果
 
-更新：{date}。状态：**四组完整五个 epoch 的训练及完整验证已完成。** [实验设计](empty_mechanism_history_design.md) · [全部指标与区间](../work_dirs/empty_mechanism_history/all_conditions.csv)。
+更新：{date}。状态：**四组完整五个 epoch 的训练及完整验证已完成。** [实验设计](empty_mechanism_history_design.md) · [全部指标与区间](../../../work_dirs/empty_mechanism_history/all_conditions.csv)。
 
 ## 1. 最重要的结果
 
@@ -134,7 +134,7 @@ def main():
 
 联合阻断在原生决策下的净救回比例为 **{ci(se['native'])}%**，同误占用水平下为 **{ci(se['matched'])}%**。它们是预先定义的反事实计数贡献，不是唯一的自然归因比例。
 
-本轮四组都从相同图像预训练权重与 seed 928 的网络初始化开始，训练完整五个 epoch。它补上[末期干预](empty_mechanism_stage3_results.md)不能消除早期训练历史的限制，并将处理限定在实际与 occupancy 共享语义值的最后渲染阶段。末期检查处理全部六个 Set 分类阶段，两轮窗口、范围与基线组不同，贡献数值不直接相减。
+本轮四组都从相同图像预训练权重与 seed 928 的网络初始化开始，训练完整五个 epoch。它补上[末期干预](../stage3/empty_mechanism_stage3_results.md)不能消除早期训练历史的限制，并将处理限定在实际与 occupancy 共享语义值的最后渲染阶段。末期检查处理全部六个 Set 分类阶段，两轮窗口、范围与基线组不同，贡献数值不直接相减。
 
 ## 2. 最终模型的整体表现
 
@@ -172,7 +172,7 @@ B0 的全部前景漏检为 **{all_misses} 个**；本轮固定组占其中 **{1
 
 {accounting}
 
-![完整五个 epoch 后：原生与同误占用水平下的净救回比例](empty_mechanism_history/net_rescue.png)
+![完整五个 epoch 后：原生与同误占用水平下的净救回比例](net_rescue.png)
 
 同误占用的正确救回与净救回区间，均在每次场景重采样中重新计算基线预算和曲线阈值。50% 是本轮事先固定的数量判据，不是普遍定律。
 
@@ -202,21 +202,21 @@ B0 的全部前景漏检为 **{all_misses} 个**；本轮固定组占其中 **{1
 
 使用原 train.py 加载预训练、建立数据流并优化；新增包装只调用已验证的路径阻断。小规模原生试运行验证了四个累积反向和一次优化器更新，真实网络图检查验证了 CE 校正对共享原始 logit 父节点的作用，以及空间与 empty 输出直接梯度保持。
 
-核查结果：[全程完整性审计](../work_dirs/empty_mechanism_history/completion_audit.json) · [机器汇总](../work_dirs/empty_mechanism_history/summary.json) · [全程协议](../work_dirs/empty_mechanism_history/protocol.json)。实现：[原生训练包装](../loss/empty_history_path_loss.py) · [训练与评价](../tools/empty_mechanism_history.py) · [报告生成](../tools/report_empty_mechanism_history.py)。
+核查结果：[全程完整性审计](../../../work_dirs/empty_mechanism_history/completion_audit.json) · [机器汇总](../../../work_dirs/empty_mechanism_history/summary.json) · [全程协议](../../../work_dirs/empty_mechanism_history/protocol.json)。实现：[原生训练包装](../../../loss/empty_history_path_loss.py) · [训练与评价](../../../tools/empty_mechanism_history.py) · [报告生成](../../../tools/report_empty_mechanism_history.py)。
 '''
-    (ROOT/'analysis/empty_mechanism_history_results.md').write_text(text)
+    (ROOT/'analysis/empty_mechanism/history/empty_mechanism_history_results.md').write_text(text)
     write_json(RUN/'completion_audit.json',dict(status='passed',models=checks,reference_initial_raw_sha256=initsha,
         all_initial_forwards_within_tolerance=True,
         validation_frames_per_model=1024,scenes=s['scenes'],original_artifacts_unchanged=True,
         whole_history_runs=True,native_net_dominance=native_pass,matched_net_dominance=matched_pass,
         summary_sha256=file_sha256(RUN/'summary.json'),source_sha256=file_sha256(__file__)))
-    design=ROOT/'analysis/empty_mechanism_history_design.md'
+    design=ROOT/'analysis/empty_mechanism/history/empty_mechanism_history_design.md'
     if design.exists():
         design.write_text(design.read_text().replace('状态：原生训练接口试运行已通过，正式全程对照已排队。',
             '状态：**四组完整五个 epoch 的训练、完整验证和配对统计已完成。**').replace(
-            '状态：**正式全程对照执行中，当前完成量见[实时进度](empty_mechanism_progress.md)。**',
+            '状态：**正式全程对照执行中，当前完成量见[实时进度](../empty_mechanism_progress.md)。**',
             '状态：**四组完整五个 epoch 的训练、完整验证和配对统计已完成。**'))
-    print(ROOT/'analysis/empty_mechanism_history_results.md')
+    print(ROOT/'analysis/empty_mechanism/history/empty_mechanism_history_results.md')
 
 
 if __name__=='__main__':main()

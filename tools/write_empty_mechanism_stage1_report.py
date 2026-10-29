@@ -13,7 +13,7 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / "work_dirs/empty_mechanism_stage1"
 TEMPLATE = ROOT / "tools/report_templates/empty_mechanism_stage1_results.md"
-OUTPUT = ROOT / "analysis/empty_mechanism_stage1_results.md"
+OUTPUT = ROOT / "analysis/empty_mechanism/stage1/empty_mechanism_stage1_results.md"
 
 
 def table(headers, rows):
@@ -173,6 +173,7 @@ def main():
             raise SystemExit("Report differs from its template/data; regenerate it.")
         print("Report matches its template and archived numeric summary.")
     else:
+        OUTPUT.parent.mkdir(parents=True, exist_ok=True)
         OUTPUT.write_text(result)
         print(OUTPUT)
 

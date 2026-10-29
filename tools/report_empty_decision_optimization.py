@@ -67,7 +67,7 @@ $$
 s=m+\Delta b_\theta.
 $$
 
-在 margin ±2 的候选内，s≥t 时输出前景，否则输出 empty；t 为训练内选定的固定工作点。P3 使用全局 bias 加局部修正，**没有再叠加 B2 的 17 个类别阈值**。代码见[决策拟合与 Predictor.__call__](../tools/fit_empty_decision_optimization.py)及[最终阈值判断](../tools/eval_empty_decision_optimization.py)。
+在 margin ±2 的候选内，s≥t 时输出前景，否则输出 empty；t 为训练内选定的固定工作点。P3 使用全局 bias 加局部修正，**没有再叠加 B2 的 17 个类别阈值**。代码见[决策拟合与 Predictor.__call__](../../../tools/fit_empty_decision_optimization.py)及[最终阈值判断](../../../tools/eval_empty_decision_optimization.py)。
 
 | 概率 | 拟合时的事件标签 | 希望为决策提供的信息 |
 |---|---|---|
@@ -79,7 +79,7 @@ $$
 
 因此，给概率赋予事件含义，并不等于已证明决策网络有效使用了该含义。网络还可直接依赖 h 中的类别、位置和分数。P3 优于 P2 支持风险约束的作用；概率的独立贡献仍需同目标、相近容量的“仅 h”与“h＋q/e/o”对照。P1 是直接按 q 阈值判断的另一诊断版本，不经过上述局部决策网络。
 
-**后续两种“类别 bias＋残差”不属于本报告的首轮结果。** 它们分别从普通特征、普通特征加 q/e/o 预测一个残差，加入 B2 的类别决策分数。定义与算术示例见[复盘文档第 7.1 节](empty_decision_optimization_failure_analysis.md)；截至 2026-10-18 已完成后续独立验证，见[进一步实验结果](empty_decision_followup_results.md)。
+**后续两种“类别 bias＋残差”不属于本报告的首轮结果。** 它们分别从普通特征、普通特征加 q/e/o 预测一个残差，加入 B2 的类别决策分数。定义与算术示例见[复盘文档第 7.1 节](empty_decision_optimization_failure_analysis.md)；截至 2026-10-18 已完成后续独立验证，见[进一步实验结果](../followup/empty_decision_followup_results.md)。
 '''
 
 
@@ -264,7 +264,7 @@ def plots(validation,primary,benchmark):
 
 
 def make_report(validation,primary,ray,benchmark,ap,bootstrap,ray_bootstrap):
-    REPORT.mkdir(exist_ok=True)
+    REPORT.mkdir(parents=True, exist_ok=True)
     protocol = read(RUN/'protocol.json')
     sample = read(RUN/'sample_manifest.json')
     selection = read(RUN/'operating_points.json')
@@ -278,7 +278,7 @@ def make_report(validation,primary,ray,benchmark,ap,bootstrap,ray_bootstrap):
         '前景类别排序和主模型权重均固定，只调整 empty/前景决策。')
     lines = ['# 实验报告：Semantic Gaussian 的 empty 决策优化验证','',
         '日期：2026-10-17。状态：**冻结模型阶段已完成；未进行主模型联合训练。**','',intro,'',
-        '对应[方法设计](../plans/semantic_gaussian_empty_decision_optimization.md)。所有模型、阈值和工作点均在训练数据内部确定；验证结果未用于回调方法。','',
+        '对应[方法设计](../../../plans/semantic_gaussian_empty_decision_optimization.md)。所有模型、阈值和工作点均在训练数据内部确定；验证结果未用于回调方法。','',
         '## 先看本次结果','',
         f'- 完整 P3：camera mIoU **{p3["camera"]["mIoU"]:.4f}**，补集误占用率 **{p3["camera_complement"]["empty_FPR"]:.4f}%**。',
         f'- 类别 bias B2：camera mIoU **{b2["camera"]["mIoU"]:.4f}**，补集误占用率 **{b2["camera_complement"]["empty_FPR"]:.4f}%**。',
@@ -331,7 +331,7 @@ def make_report(validation,primary,ray,benchmark,ap,bootstrap,ray_bootstrap):
         lines.append(f'| {family} | {v["camera"]["mIoU"]:.4f} | {v["all_valid"]["mIoU"]:.4f} | {v["camera_complement"]["mIoU"]:.4f} | {v["camera_complement"]["empty_FPR"]:.4f}% | {v["camera_complement"]["empty_FPR"]-ref:+.4f} |')
     lines += ['',
         '误占用率的分母是该区域全部真实 empty 体素，不是翻转体素数量。若验证增量大于 +0.5 个百分点，表示训练预算未直接迁移为验证约束。','',
-        '![训练内固定工作点的验证收益与误占用关系](empty_decision_optimization/risk_tradeoff.png)','',
+        '![训练内固定工作点的验证收益与误占用关系](risk_tradeoff.png)','',
         '图中每个点都在查看验证结果之前选定；连线只帮助观察，不是使用验证集搜索出的最优曲线。','',
         '### 2.1 主要对照的配对不确定性','',
         '采用 500 次场景级配对 bootstrap。区间条件于既有主模型、已拟合模块及固定工作点，未重新拟合；不包含主模型训练不确定性。','',
@@ -369,7 +369,7 @@ def make_report(validation,primary,ray,benchmark,ap,bootstrap,ray_bootstrap):
         strings = [f'{np.mean(v):.4f} ± {np.std(v,ddof=1):.4f}' for v in values]
         lines.append('| '+family+' | '+' | '.join(strings)+' |')
     lines += ['',
-        '![冻结主模型下的三个模块种子](empty_decision_optimization/module_seeds.png)','',
+        '![冻结主模型下的三个模块种子](module_seeds.png)','',
         'P3 与 P4 分别重新拟合了概率头和决策层，因此该消融衡量“可用支持信息的整体方法增量”，不是对同一已训练网络遮蔽一个输入的因果干预。','',
         '## 5. 概率是否可靠？','',
         'NLL、三分类 Brier 和 ECE 在完整候选体素上统计；下表为 seed 928。AP 使用与标签无关的候选抽样及逆纳入概率权重，点估计按原始分数排序，未分箱近似。','',
@@ -383,7 +383,7 @@ def make_report(validation,primary,ray,benchmark,ap,bootstrap,ray_bootstrap):
             lines.append(f'| {label} | {region_label} | {c["NLL"]:.4f} | {c["Brier"]:.4f} | {c["q_ECE"]*100:.2f}% | {c["e_ECE"]*100:.2f}% | {a["q_AP"]*100:.2f}% | {a["q_prevalence"]*100:.2f}% |')
     lines += ['',
         f'AP 共使用 **{ap["rows"]:,} 个候选样本**。本次候选是 margin 绝对值不超过 2 的双向邻域，与旧报告仅额外减去 1 会翻转的候选不同，AP 数值不能直接作前后提升比较。低 ECE 也不等于具有足够排序能力或能提高 mIoU。','',
-        '![三结果概率的分区域校准图](empty_decision_optimization/probability_calibration.png)','',
+        '![三结果概率的分区域校准图](probability_calibration.png)','',
         '图中圆点面积随分箱体素比例增加；为避免极少数样本形成尖峰，隐藏少于该区域候选 0.01% 或少于 1000 个体素的分箱。上表的 NLL、Brier 与 ECE 仍使用全部候选体素。','',
         '## 6. 修改后的体素究竟发生了什么？','',
         '以下展示 seed 928 的主要方法。正确前景新增与撤回均按原生 B0 比较；“误占用撤回”只统计真实 empty。完整六类变化计数见结构化结果。','',
@@ -433,16 +433,16 @@ def make_report(validation,primary,ray,benchmark,ap,bootstrap,ray_bootstrap):
         'python3.10 tools/audit_empty_decision_optimization.py benchmark',
         'python3.10 tools/report_empty_decision_optimization.py',
         '```','',
-        '- [冻结工作点与训练内选择结果](../work_dirs/empty_decision_optimization/operating_points.json)。',
-        '- [全部 59 个验证工作点、校准统计及逐帧索引](../work_dirs/empty_decision_optimization/validation/summary.json)。',
-        '- [官方 RayIoU 及计数](../work_dirs/empty_decision_optimization/ray/summary.json)。',
-        '- [完整推理计时](../work_dirs/empty_decision_optimization/benchmark.json)。',
-        '- [场景级配对区间](../work_dirs/empty_decision_optimization/scene_bootstrap.json)。',
-        '- [全部工作点的 CSV 汇总](empty_decision_optimization/all_operating_points.csv)。',
-        '- [主要方法逐类别 TP/FP/FN 与 IoU](empty_decision_optimization/per_class_metrics.csv)。',
-        '- [完成性与来源审计](../work_dirs/empty_decision_optimization/completion_audit.json)。','',
+        '- [冻结工作点与训练内选择结果](../../../work_dirs/empty_decision_optimization/operating_points.json)。',
+        '- [全部 59 个验证工作点、校准统计及逐帧索引](../../../work_dirs/empty_decision_optimization/validation/summary.json)。',
+        '- [官方 RayIoU 及计数](../../../work_dirs/empty_decision_optimization/ray/summary.json)。',
+        '- [完整推理计时](../../../work_dirs/empty_decision_optimization/benchmark.json)。',
+        '- [场景级配对区间](../../../work_dirs/empty_decision_optimization/scene_bootstrap.json)。',
+        '- [全部工作点的 CSV 汇总](all_operating_points.csv)。',
+        '- [主要方法逐类别 TP/FP/FN 与 IoU](per_class_metrics.csv)。',
+        '- [完成性与来源审计](../../../work_dirs/empty_decision_optimization/completion_audit.json)。','',
         f'Checkpoint SHA256：`{protocol["checkpoint_sha256"]}`。','']
-    path = ROOT/'analysis/empty_decision_optimization_results.md'
+    path = ROOT/'analysis/empty_decision/optimization/empty_decision_optimization_results.md'
     path.write_text('\n'.join(lines))
     fields = ['id','family','seed','budget','camera_mIoU','complement_mIoU','all_mIoU','complement_FPR','camera_IoU','all_IoU','tuning_camera_mIoU','tuning_complement_FPR']
     with (REPORT/'all_operating_points.csv').open('w',newline='') as f:
@@ -462,7 +462,7 @@ def main():
     ray = read(RUN/'ray/summary.json')
     benchmark = read(RUN/'benchmark.json')
     assert validation['samples'] == ray['samples'] == 1024
-    REPORT.mkdir(exist_ok=True)
+    REPORT.mkdir(parents=True, exist_ok=True)
     primary = primary_points(validation)
     ap = probability_ap(validation)
     bootstrap = scene_bootstrap(validation,primary)

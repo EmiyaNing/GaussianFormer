@@ -1,6 +1,6 @@
 # Empty 漏检机制：第二阶段实验结果
 
-更新：2026-10-19。**本轮机制实验和追加校准对照已完成，完整性审计通过。** 配套材料：[实验设计](empty_mechanism_stage2_design.md) · [全部条件与统计区间](empty_mechanism_stage2/all_conditions.csv)。
+更新：2026-10-19。**本轮机制实验和追加校准对照已完成，完整性审计通过。** 配套材料：[实验设计](empty_mechanism_stage2_design.md) · [全部条件与统计区间](all_conditions.csv)。
 
 正文按“主要结论—机制证据—方法效果”展开。完整消融表、内部变量和复现记录放在附录，便于需要时核查。
 
@@ -105,7 +105,7 @@ Set 负类和 CE empty 的漏检增加，在 epoch 1、3、5 三个 checkpoint �
 
 校准后，两个起点的差值均为负，95% 区间也均低于零。区间按 150 个验证场景配对重采样 1000 次得到，条件于已经选定的阈值。
 
-![投影相对原训练模型：原生增益与同等校准后的增益](empty_mechanism_stage2/equal_bias_comparison.png)
+![投影相对原训练模型：原生增益与同等校准后的增益](equal_bias_comparison.png)
 
 图中零线以上表示投影更好，零线以下表示原训练模型更好。两个起点都从“原生时为正”变成了“同等校准后为负”。
 
@@ -123,7 +123,7 @@ Set 负类和 CE empty 的漏检增加，在 epoch 1、3、5 三个 checkpoint �
 
 对下一步方法设计，本轮给出三个约束：保留前景类别区分能力；保留对真实空体素的有效抑制；在同等类别 bias 校准后仍检验是否有额外收益。仅靠提高总幅度、减少漏检或改善未校准 mIoU，证据都不充分。
 
-跨表征的结论也需另做比较。当前 [OPUS 点离散化代码](../model/head/opus_rasterizer.py)同样使用分类置信度阈值，本轮不能推导出“只有 Gaussian 才会出现这种敏感性”。
+跨表征的结论也需另做比较。当前 [OPUS 点离散化代码](../../../model/head/opus_rasterizer.py)同样使用分类置信度阈值，本轮不能推导出“只有 Gaussian 才会出现这种敏感性”。
 
 ---
 
@@ -139,7 +139,7 @@ Set 负类和 CE empty 的漏检增加，在 epoch 1、3、5 三个 checkpoint �
 
 共同系数下，Set 分类更新的平均长度分别约为联合更新的 {{ value:ratio_text }}。第一阶段曾把各方向分别调整到相同长度，不能把那一阶段的效应大小直接当作真实训练中的相对贡献。本轮支持幅度路径存在，但没有据此认定它主导联合更新。
 
-![三个训练阶段中，各监督来源对漏检率的影响](empty_mechanism_stage2/source_effects.png)
+![三个训练阶段中，各监督来源对漏检率的影响](source_effects.png)
 
 ### A2. empty 覆盖越高，幅度抑制是否越强
 
@@ -181,7 +181,7 @@ empty 覆盖比例指 Gaussian 的空间贡献中落在真实 empty 上的比例
 
 “当前梯度置零”仍保留历史动量和权重衰减，因此也会改变参数与预测。它说明这一步的预测变化不能只归因于当前 batch 的某个损失，也不能要求不同损失在 AdamW 下的效应线性相加。
 
-“只更新最后分类分支”的实验也已完成，并检查几何、opacity 和 empty 保持固定；逐条件结果及配对区间见[全部结果 CSV](empty_mechanism_stage2/all_conditions.csv)。
+“只更新最后分类分支”的实验也已完成，并检查几何、opacity 和 empty 保持固定；逐条件结果及配对区间见[全部结果 CSV](all_conditions.csv)。
 
 ## 附录 C：64 步续训的完整消融
 
@@ -203,7 +203,7 @@ empty 覆盖比例指 Gaussian 的空间贡献中落在真实 empty 上的比例
 
 从 epoch 1 出发，投影优于这些对照；从 epoch 3 出发，三个差值区间都包含零，优势尚不稳定。
 
-![64 步后各训练条件相对 B0 的 mIoU 变化](empty_mechanism_stage2/short64_comparison.png)
+![64 步后各训练条件相对 B0 的 mIoU 变化](short64_comparison.png)
 
 ### C2. Gaussian 幅度与 empty 参数怎样变化
 
@@ -265,8 +265,8 @@ CE 拆分的最大损失值差为 {{ value:audit_max_ce_value_error }}；Set 拆
 
 ### 核查与复现入口
 
-报告正文来自[Markdown 模板](../tools/report_templates/empty_mechanism_stage2_results.md)，表格数值由[报告生成脚本](../tools/write_empty_mechanism_stage2_report.py)读取已审计汇总生成。
+报告正文来自[Markdown 模板](../../../tools/report_templates/empty_mechanism_stage2_results.md)，表格数值由[报告生成脚本](../../../tools/write_empty_mechanism_stage2_report.py)读取已审计汇总生成。
 
-原始证据：[机器汇总](../work_dirs/empty_mechanism_stage2/summary.json) · [完整性审计](../work_dirs/empty_mechanism_stage2/completion_audit.json) · [方法筛选记录](../work_dirs/empty_mechanism_stage2/method_gate.json) · [原协议](../work_dirs/empty_mechanism_stage2/protocol.json) · [执行补充协议](../work_dirs/empty_mechanism_stage2/execution_addendum.json)。
+原始证据：[机器汇总](../../../work_dirs/empty_mechanism_stage2/summary.json) · [完整性审计](../../../work_dirs/empty_mechanism_stage2/completion_audit.json) · [方法筛选记录](../../../work_dirs/empty_mechanism_stage2/method_gate.json) · [原协议](../../../work_dirs/empty_mechanism_stage2/protocol.json) · [执行补充协议](../../../work_dirs/empty_mechanism_stage2/execution_addendum.json)。
 
-复现代码：[输出诊断](../tools/empty_mechanism_stage2.py) · [优化器与续训](../tools/train_empty_mechanism_stage2.py) · [类别校准](../tools/calibrate_empty_mechanism_stage2.py) · [统计汇总](../tools/report_empty_mechanism_stage2.py) · [完整性检查](../tools/audit_empty_mechanism_stage2.py)。各条件的逐帧记录、源码校验值和训练顺序保存在实验目录。
+复现代码：[输出诊断](../../../tools/empty_mechanism_stage2.py) · [优化器与续训](../../../tools/train_empty_mechanism_stage2.py) · [类别校准](../../../tools/calibrate_empty_mechanism_stage2.py) · [统计汇总](../../../tools/report_empty_mechanism_stage2.py) · [完整性检查](../../../tools/audit_empty_mechanism_stage2.py)。各条件的逐帧记录、源码校验值和训练顺序保存在实验目录。

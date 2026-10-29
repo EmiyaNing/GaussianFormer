@@ -161,6 +161,7 @@ def ci(value):return f"[{number(value[0])}, {number(value[1])}]"
 
 def main():
     checks=audit()
+    (ROOT/'analysis/probability_rendering').mkdir(parents=True, exist_ok=True)
     meta=read(RUN/'evaluation/baseline/validation_frames.json');scenes=sorted({r['scene'] for r in meta})
     rng=np.random.default_rng(9282027)
     draws=rng.integers(0,len(scenes),size=(NBOOT,len(scenes)))
@@ -202,7 +203,7 @@ def main():
     calibration_verdict='同等类别校准后，概率替换仍有正向优势，且本轮场景区间不跨 0。' if calibrated['ci'][0]>0 else '同等类别校准后的场景区间跨 0，本轮没有建立稳健的额外优势。' if calibrated['ci'][1]>=0 else '同等类别校准后概率替换表现更低，本轮场景区间不跨 0。'
     lines+=['',f"替换的原生 mIoU 差值为 **{number(native['delta_pp'])} pp**；同等类别校准后差值为 **{number(calibrated['delta_pp'])} pp**。这两个结果需要同时阅读：前者反映直接使用效果，后者检查工作点校正后是否仍有优势。",'',
         calibration_verdict+'这是当前 mini 划分和一个训练 seed 下的结果。','',
-        '![性能与温度干预](../work_dirs/gf2_probability_decomposition/figures/overview.png)','',
+        '![性能与温度干预](../../work_dirs/gf2_probability_decomposition/figures/overview.png)','',
         '## 2. 验证一：自然预测中的联合／分层差异','',
         '决策差异组指“分层预测前景、联合预测 empty”的体素。分层会把这一组全部改成前景，但只有“真实前景且首选正确”的部分能正确救回。',
         '', '| 统计量 | B0 加性 | P 概率 |','| --- | --- | --- |']
@@ -224,7 +225,7 @@ def main():
     p=summary['probability']['temperatures']['2.0']['events'];b=summary['probability']['temperatures']['0.5']['events']
     numerical_ties={name:sum(v['events']['numerical_argmax_ties'] for v in summary[name]['temperatures'].values()) for name in MODELS}
     lines+=['',f"在 P 中，仅将 T 调到 2，就有 **{p['correct_to_empty']:,}** 个原本正确前景变为 empty；调到 0.5 可正确救回 **{b['missed_to_correct']:,}** 个原生漏检。所有温度下，前景首选变化、empty 概率变化和分层决策变化均为 **0**；T=1 精确重现原决策。",'',
-        f"数值处理：温度变换可能把相差一个双精度单位的概率舍入为完全并列的最大值。本轮跨五个温度共记录 B0 **{numerical_ties['baseline']:,}**、P **{numerical_ties['probability']:,}** 个此类“体素×温度”事件；均保留原首选类别，并严格核验它仍为变换后的最大值。没有放宽严格排序反转的检查，也没有改动训练或验证缓存。修订经过 11 项检查，见[统计修订记录](../work_dirs/gf2_probability_decomposition/statistical_repair.json)。",'',
+        f"数值处理：温度变换可能把相差一个双精度单位的概率舍入为完全并列的最大值。本轮跨五个温度共记录 B0 **{numerical_ties['baseline']:,}**、P **{numerical_ties['probability']:,}** 个此类“体素×温度”事件；均保留原首选类别，并严格核验它仍为变换后的最大值。没有放宽严格排序反转的检查，也没有改动训练或验证缓存。修订经过 11 项检查，见[统计修订记录](../../work_dirs/gf2_probability_decomposition/statistical_repair.json)。",'',
         '这个干预检验的是联合决策路径：即使 empty 分数不升高，前景概率份额也能改变 empty 是否获胜。它不能单独证明自然训练中的主要成因，也不意味着联合 MAP 对平坦类别错误代价是错误的。',
         '', '## 4. 验证三：显式任务代价是否超过公平校准参照','',
         '风险族固定误占用和漏检代价为 1，用 γ 控制前景错类代价。γ=1 为联合决策，γ=0 为分层决策。每个候选先在 523 个训练场景拟合类别阈值，再用另外 175 个训练场景选择公共平移和 γ。验证标签不参与此选择。',
@@ -251,9 +252,9 @@ def main():
         '', f"完整性审计 **{sum(checks.values())}/{len(checks)}** 项通过，包括官方后端前向／梯度核对、原生累积更新预检、两组首次输出及标签和投影矩阵的全部 20480 条指纹配对、完整 1024 帧验证、温度阴性对照以及既有结果文件未改变。",'',
         f"区间来自 {len(scenes)} 个验证场景的 1000 次配对重采样。这里只有一个训练 seed；区间没有覆盖训练随机性的变化。概率渲染的 empty NLL 对固定几何下的语义输出直接梯度为零，不表示共享网络参数与几何训练完全独立。",'',
         '这轮需要区分三个层次：概率渲染替换的实际性能；固定输出条件下可以验证的决策耦合；需要额外自然训练干预才能判断的主导成因。分解与分层决策本身已有 GaussianFormer-2 先例，创新性应建立在新增的可检验机制和超过公平校准参照的方法收益上。',
-        '', '数据入口：[完整统计](../work_dirs/gf2_probability_decomposition/summary.json) · [性能 CSV](../work_dirs/gf2_probability_decomposition/performance.csv) · [完整性审计](../work_dirs/gf2_probability_decomposition/completion_audit.json) · [运行协议](../work_dirs/gf2_probability_decomposition/protocol.json)。','']
-    (ROOT/'analysis/gf2_probability_decomposition_results.md').write_text('\n'.join(lines))
-    design=ROOT/'analysis/gf2_probability_decomposition_design.md'
+        '', '数据入口：[完整统计](../../work_dirs/gf2_probability_decomposition/summary.json) · [性能 CSV](../../work_dirs/gf2_probability_decomposition/performance.csv) · [完整性审计](../../work_dirs/gf2_probability_decomposition/completion_audit.json) · [运行协议](../../work_dirs/gf2_probability_decomposition/protocol.json)。','']
+    (ROOT/'analysis/probability_rendering/gf2_probability_decomposition_results.md').write_text('\n'.join(lines))
+    design=ROOT/'analysis/probability_rendering/gf2_probability_decomposition_design.md'
     text=design.read_text().replace('协议已登记，官方 CUDA 后端已编译，正在完成正式训练前校验。',
         '按登记协议完成训练、验证和三项诊断；实测结果见配套结果报告。')
     text=text.replace('协议已登记，官方后端及完整模型预检通过，正式五轮训练已启动。',
