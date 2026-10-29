@@ -1,4 +1,5 @@
 import torch, torch.nn as nn
+import numpy as np
 
 import torch.nn.functional as F
 
@@ -98,7 +99,10 @@ class GaussianVoxelLearnear(BaseLifter):
         for i in range(batch_size):
             current_lidar = metas['lidar_points'][i]
 
-            voxels, coords, num_points = self.lidar_processor.generate(current_lidar.cpu().numpy())
+            if isinstance(current_lidar, torch.Tensor):
+                current_lidar = current_lidar.detach().cpu().numpy()
+            current_lidar = np.ascontiguousarray(current_lidar, dtype=np.float32)
+            voxels, coords, num_points = self.lidar_processor.generate(current_lidar)
             voxels = torch.from_numpy(voxels).to(device)
             coords = torch.from_numpy(coords).to(device)
             num_points = torch.from_numpy(num_points).to(device)

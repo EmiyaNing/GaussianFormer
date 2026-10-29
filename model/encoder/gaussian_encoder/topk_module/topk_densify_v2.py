@@ -58,7 +58,8 @@ class DensifyOnly(BaseModule):
             self,
             instance_feature: torch.Tensor,
             anchor: torch.Tensor,
-            gaussian: GaussianPrediction
+            gaussian: GaussianPrediction,
+            terminal=False,
         ):
         '''
             This module reference the gaussian refine module, 
@@ -101,10 +102,12 @@ class DensifyOnly(BaseModule):
             filter_rots   = cur_rots[indices]
             filter_sems   = cur_sems[indices]
             filter_means  = cur_means[indices]
-            filter_anchor = cur_anchor[indices]
+            if not terminal:
+                filter_anchor = cur_anchor[indices]
         
             densified_feats = self.feature_proj(filter_feats)
-            new_features.append(densified_feats)
+            if not terminal:
+                new_features.append(densified_feats)
 
 
             # refine module use the restrict xyz's moving 
@@ -140,16 +143,17 @@ class DensifyOnly(BaseModule):
             cur_new_means_y = torch.clamp(cur_new_means[:, 1], self.pc_range[1] + 1e-6, self.pc_range[4] - 1e-6)
             cur_new_means_z = torch.clamp(cur_new_means[:, 2], self.pc_range[2] + 1e-6, self.pc_range[5] - 1e-6)
             cur_new_means = torch.stack([cur_new_means_x, cur_new_means_y, cur_new_means_z], dim=-1)
-            cur_new_xyz_output = safe_sigmoid(cur_new_means)
 
             cur_new_scales = filter_scales * scale_shift
             cur_new_scales = torch.clamp(cur_new_scales, self.scale_range[0], self.scale_range[1])
 
             # update the anchor output
-            cur_scale_out  = filter_anchor[:, 3:6] * scale_shift
-            cur_rots_out   = filter_anchor[:, 6:10] / 2 + rots_shift_out / 2
-            cur_opas_out   = filter_anchor[:, 10:11] / 2 + opa_shift_out / 2
-            cur_sems_out   = filter_anchor[:, 11:] / 2 + sem_shift_out / 2
+            if not terminal:
+                cur_new_xyz_output = safe_sigmoid(cur_new_means)
+                cur_scale_out  = filter_anchor[:, 3:6] * scale_shift
+                cur_rots_out   = filter_anchor[:, 6:10] / 2 + rots_shift_out / 2
+                cur_opas_out   = filter_anchor[:, 10:11] / 2 + opa_shift_out / 2
+                cur_sems_out   = filter_anchor[:, 11:] / 2 + sem_shift_out / 2
     
 
             new_means.append(cur_new_means)
@@ -157,10 +161,12 @@ class DensifyOnly(BaseModule):
             new_rotations.append(filter_rots / 2 + rots_shift / 2)
             new_semantics.append(filter_sems / 2 + sem_shift / 2)
             new_opacitices.append(filter_opa / 2 + opa_shift / 2)
-            new_outputs.append(torch.cat([cur_new_xyz_output, cur_scale_out, cur_rots_out, cur_opas_out, cur_sems_out], dim=-1))
+            if not terminal:
+                new_outputs.append(torch.cat([cur_new_xyz_output, cur_scale_out, cur_rots_out, cur_opas_out, cur_sems_out], dim=-1))
 
-        new_features = torch.stack(new_features)
-        new_outputs  = torch.stack(new_outputs)
+        if not terminal:
+            new_features = torch.stack(new_features)
+            new_outputs = torch.stack(new_outputs)
 
         new_opacitices = torch.stack(new_opacitices)
         new_semantics  = torch.stack(new_semantics)
@@ -168,8 +174,9 @@ class DensifyOnly(BaseModule):
         new_scales     = torch.stack(new_scales)
         new_rotations  = torch.stack(new_rotations)    
 
-        result_features = torch.cat([instance_feature, new_features], dim=1)
-        result_outputs  = torch.cat([anchor, new_outputs], dim=1)
+        if not terminal:
+            result_features = torch.cat([instance_feature, new_features], dim=1)
+            result_outputs = torch.cat([anchor, new_outputs], dim=1)
         result_opacitices = torch.cat([opacities, new_opacitices], dim=1)
         result_semantics  = torch.cat([semantics, new_semantics], dim=1)
         result_scales     = torch.cat([scales, new_scales], dim=1)
@@ -183,4 +190,9 @@ class DensifyOnly(BaseModule):
             opacities=result_opacitices,
             semantics=result_semantics
         )
+        if terminal:
+            delta = GaussianPrediction(means=new_means, scales=new_scales,
+                                       rotations=new_rotations, opacities=new_opacitices,
+                                       semantics=new_semantics)
+            return reuslt_gaussian, delta
         return result_outputs, reuslt_gaussian, result_features

@@ -158,8 +158,10 @@ class DeformableFeatureAggregation(BaseModule):
             feature_queue
         ) = meta_queue = temp_anchor_embeds = []
         if self.use_deformable_func:
-            feature_maps_clip = [fm[:, :self.num_cams].clone() for fm in feature_maps]
-            feature_maps_clip = DAF.feature_maps_format(feature_maps_clip)
+            feature_maps_clip = kwargs.get('formatted_feature_maps')
+            if feature_maps_clip is None:
+                feature_maps_clip = [fm[:, :self.num_cams].clone() for fm in feature_maps]
+                feature_maps_clip = DAF.feature_maps_format(feature_maps_clip)
 
         for (
             temp_feature_maps,

@@ -4,6 +4,7 @@ import torch, torch.nn as nn
 from mmengine.registry import MODELS
 from .base_head import BaseTaskHead
 from ..utils.utils import get_rotation_matrix
+from .gaussian_execution import inverse_gaussian_covariance, fixed_gaussian_weights
 
 
 @MODELS.register_module()
@@ -22,6 +23,10 @@ class GaussianHead(BaseTaskHead):
         use_localaggprob_fast=False,
         use_localagg_react=False,
         combine_geosem=False,
+        analytic_covariance=False,
+        separate_empty=False,
+        incremental_densify=False,
+        cache_render_grid=False,
         **kwargs,
     ):
         super().__init__(init_cfg)
@@ -29,9 +34,23 @@ class GaussianHead(BaseTaskHead):
         self.num_classes = num_classes
         self.use_localaggprob = use_localaggprob
         self.use_localagg_react = use_localagg_react
+        self.analytic_covariance = analytic_covariance
+        self.separate_empty = separate_empty
+        self.incremental_densify = incremental_densify
+        self.cache_render_grid = cache_render_grid
+        if (separate_empty or incremental_densify or cache_render_grid) and not use_localagg_react:
+            raise ValueError('React execution optimizations require the additive React renderer')
+        if separate_empty and not with_empty:
+            raise ValueError('separate_empty requires with_empty=True')
+        self.register_buffer('_cached_points_int', torch.empty(0, dtype=torch.int32), persistent=False)
+        self.register_buffer('_cached_empty_weights', torch.empty(0), persistent=False)
         if use_localagg_react:
-            import local_aggregate_react
-            self.aggregator = local_aggregate_react.LocalAggregator(**cuda_kwargs)
+            if analytic_covariance or separate_empty or incremental_densify or cache_render_grid:
+                from .react_local_aggregate import PreparedReactAggregator
+                self.aggregator = PreparedReactAggregator(**cuda_kwargs)
+            else:
+                import local_aggregate_react
+                self.aggregator = local_aggregate_react.LocalAggregator(**cuda_kwargs)
         elif use_localaggprob:
             if use_localaggprob_fast:
                 import local_aggregate_prob_fast
@@ -84,7 +103,7 @@ class GaussianHead(BaseTaskHead):
             gt_xyz = gt_xyz[gt_mask].reshape(1, -1, 3)
         return gt_xyz, gt_label
 
-    def prepare_gaussian_args(self, gaussians):
+    def prepare_gaussian_args(self, gaussians, append_empty=True):
         means = gaussians.means # b, g, 3
         scales = gaussians.scales # b, g, 3
         rotations = gaussians.rotations # b, g, 4
@@ -98,13 +117,14 @@ class GaussianHead(BaseTaskHead):
                 opacities = torch.cat([torch.zeros_like(opacities[..., :1]), opacities], dim=-1)
             else:
                 opacities = torch.cat([opacities, torch.zeros_like(opacities[..., :1])], dim=-1)
-            means = torch.cat([means, self.empty_mean], dim=1)
-            scales = torch.cat([scales, self.empty_scale], dim=1)
-            rotations = torch.cat([rotations, self.empty_rot], dim=1)
-            empty_sem = self.empty_sem.clone()
-            empty_sem[..., self.empty_label] += self.empty_scalar
-            opacities = torch.cat([opacities, empty_sem], dim=1)
-            origi_opa = torch.cat([origi_opa, self.empty_opa], dim=1)
+            if append_empty:
+                means = torch.cat([means, self.empty_mean], dim=1)
+                scales = torch.cat([scales, self.empty_scale], dim=1)
+                rotations = torch.cat([rotations, self.empty_rot], dim=1)
+                empty_sem = self.empty_sem.clone()
+                empty_sem[..., self.empty_label] += self.empty_scalar
+                opacities = torch.cat([opacities, empty_sem], dim=1)
+                origi_opa = torch.cat([origi_opa, self.empty_opa], dim=1)
         elif self.use_localaggprob:
             assert opacities.shape[-1] == self.num_classes - 1
             opacities = opacities.softmax(dim=-1)
@@ -114,15 +134,73 @@ class GaussianHead(BaseTaskHead):
                 opacities = torch.cat([opacities, torch.zeros_like(opacities[..., :1])], dim=-1)
 
         bs, g, _ = means.shape
-        S = torch.zeros(bs, g, 3, 3, dtype=means.dtype, device=means.device)
-        S[..., 0, 0] = scales[..., 0]
-        S[..., 1, 1] = scales[..., 1]
-        S[..., 2, 2] = scales[..., 2]
-        R = get_rotation_matrix(rotations) # b, g, 3, 3
-        M = torch.matmul(S, R)
-        Cov = torch.matmul(M.transpose(-1, -2), M)
-        CovInv = Cov.cpu().inverse().cuda() # b, g, 3, 3
+        if self.analytic_covariance:
+            CovInv = inverse_gaussian_covariance(scales, rotations)
+        else:
+            S = torch.zeros(bs, g, 3, 3, dtype=means.dtype, device=means.device)
+            S[..., 0, 0] = scales[..., 0]
+            S[..., 1, 1] = scales[..., 1]
+            S[..., 2, 2] = scales[..., 2]
+            R = get_rotation_matrix(rotations) # b, g, 3, 3
+            M = torch.matmul(S, R)
+            Cov = torch.matmul(M.transpose(-1, -2), M)
+            CovInv = Cov.cpu().inverse().cuda() # b, g, 3, 3
         return means, origi_opa, opacities, scales, CovInv
+
+    def _load_from_state_dict(self, *args, **kwargs):
+        super()._load_from_state_dict(*args, **kwargs)
+        # Cached fields are not checkpoint state and must follow newly loaded
+        # fixed background geometry, even when tensor shapes did not change.
+        self._cached_points_int = self._cached_points_int.new_empty(0)
+        self._cached_empty_weights = self._cached_empty_weights.new_empty(0)
+
+    def _react_context(self, sampled_xyz):
+        if not self.use_localagg_react or not (
+                self.cache_render_grid or self.separate_empty or self.incremental_densify):
+            return {}
+        points = sampled_xyz[0].float()
+        if self.cache_render_grid and self._cached_points_int.shape == points.shape:
+            points_int = self._cached_points_int
+        else:
+            points_int = ((points - self.aggregator.pc_min) /
+                          self.aggregator.grid_size).to(torch.int32)
+            if self.cache_render_grid:
+                self._cached_points_int = points_int.detach()
+        context = dict(points_int=points_int)
+        if self.separate_empty:
+            if self.cache_render_grid and self._cached_empty_weights.shape == points.shape[:1]:
+                weights = self._cached_empty_weights
+            else:
+                with torch.no_grad():
+                    weights = fixed_gaussian_weights(
+                        points, self.empty_mean, self.empty_scale, self.empty_rot,
+                        self.aggregator.scale_multiplier, self.aggregator.pc_min,
+                        self.aggregator.grid_size,
+                        (self.aggregator.H, self.aggregator.W, self.aggregator.D))
+                if self.cache_render_grid:
+                    self._cached_empty_weights = weights
+            background_sem = self.empty_sem[0, 0].clone()
+            background_sem[self.empty_label] += self.empty_scalar[0]
+            context.update(empty_weights=weights, background_sem=background_sem)
+        return context
+
+    def _render(self, gaussians, sampled_xyz, context, include_empty=True):
+        append_empty = include_empty and not self.separate_empty
+        arguments = (self.prepare_gaussian_args(gaussians) if append_empty else
+                     self.prepare_gaussian_args(gaussians, append_empty=False))
+        means, opacity, semantics, scales, inverse = arguments
+        batch, count = means.shape[:2]
+        extra = dict(points_int=context['points_int']) if 'points_int' in context else {}
+        optimized = (self.analytic_covariance or self.separate_empty or
+                     self.incremental_densify or self.cache_render_grid)
+        points = sampled_xyz if optimized else sampled_xyz.clone()
+        logits = self.aggregator(points.float(), means, opacity.reshape(batch, count),
+                                 semantics, scales, inverse, **extra)
+        if self.separate_empty and include_empty:
+            # Additive renderer outputs are not saved for backward; this
+            # in-place epilogue avoids an additional dense logits allocation.
+            logits.addcmul_(context['empty_weights'][:, None], context['background_sem'][None])
+        return logits
 
     def forward(
         self,
@@ -157,19 +235,21 @@ class GaussianHead(BaseTaskHead):
         occ_nonempty_mask = metas['occ_nonempty_mask'].to(self.zero_tensor.device) if 'occ_nonempty_mask' in metas.keys() else None
         occ_loss_mask = metas['occ_loss_mask'].to(self.zero_tensor.device) if 'occ_loss_mask' in metas.keys() else occ_mask
         sampled_xyz, sampled_label = self._sampling(occ_xyz, occ_label, None)
+        context = self._react_context(sampled_xyz)
+        rendered = {}
         for idx in apply_loss_layers:
             gaussians = representation[idx]['gaussian']
-
-            means, origi_opa, opacities, scales, CovInv = self.prepare_gaussian_args(gaussians)
-            bs, g = means.shape[:2]
-
-            semantics = self.aggregator(
-                sampled_xyz.clone().float(), 
-                means, 
-                origi_opa.reshape(bs, g),
-                opacities,
-                scales,
-                CovInv) # 1, c, n
+            parent = representation[idx].get('densify_parent_index')
+            if self.incremental_densify and parent in rendered:
+                # Provenance is emitted only by the append-only terminal
+                # DensifyOnly path. Reuse parent logits including background.
+                delta = representation[idx]['delta_gaussian']
+                semantics = rendered[parent] + self._render(
+                    delta, sampled_xyz, context, include_empty=False)
+            else:
+                semantics = self._render(gaussians, sampled_xyz, context)
+            if self.incremental_densify:
+                rendered[idx] = semantics
             if self.use_localaggprob:
                 if self.combine_geosem:
                     sem = semantics[0][:, :-1] * semantics[1].unsqueeze(-1)

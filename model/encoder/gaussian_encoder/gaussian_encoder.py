@@ -4,6 +4,8 @@ import torch, torch.nn as nn
 from mmseg.registry import MODELS
 from mmengine import build_from_cfg
 from ..base_encoder import BaseEncoder
+from .deformable_module import DeformableFeatureAggregation, DAF
+from .topk_module.topk_densify_v2 import DensifyOnly
 
 
 @MODELS.register_module()
@@ -24,10 +26,16 @@ class GaussianOccEncoder(BaseEncoder):
         num_decoder: int = 6,
         operation_order: Optional[List[str]] = None,
         init_cfg=None,
+        cache_image_features=False,
+        skip_unused_anchor_embed=False,
+        terminal_densify=False,
         **kwargs,
     ):
         super().__init__(init_cfg)
         self.num_decoder = num_decoder
+        self.cache_image_features = cache_image_features
+        self.skip_unused_anchor_embed = skip_unused_anchor_embed
+        self.terminal_densify = terminal_densify
 
         if operation_order is None:
             operation_order = [
@@ -97,7 +105,10 @@ class GaussianOccEncoder(BaseEncoder):
         anchor_embed = self.anchor_encoder(anchor)
 
         prediction = []
+        formatted_features = {}
         for i, op in enumerate(self.operation_order):
+            if anchor_embed is None and (op in ('deformable', 'history') or 'refine' in op):
+                anchor_embed = self.anchor_encoder(anchor)
             if op == 'spconv':
                 instance_feature = self.layers[i](
                     instance_feature,
@@ -109,12 +120,22 @@ class GaussianOccEncoder(BaseEncoder):
             elif op == "add":
                 instance_feature = instance_feature + identity
             elif op == "deformable" or op == "history":
+                extra = {}
+                layer = self.layers[i]
+                if self.cache_image_features and isinstance(layer, DeformableFeatureAggregation):
+                    cameras = layer.num_cams
+                    if cameras not in formatted_features:
+                        prepared = DAF.feature_maps_format([fm[:, :cameras] for fm in feature_maps])
+                        formatted_features[cameras] = (
+                            prepared[0].contiguous().float(), prepared[1].int(), prepared[2].int())
+                    extra['formatted_feature_maps'] = formatted_features[cameras]
                 instance_feature = self.layers[i](
                     instance_feature,
                     anchor,
                     anchor_embed,
                     feature_maps,
                     metas,
+                    **extra,
                 )
             elif "refine" in op:
                 anchor, gaussian = self.layers[i](
@@ -124,22 +145,29 @@ class GaussianOccEncoder(BaseEncoder):
                 )
           
                 prediction.append({'gaussian': gaussian})
-                if i != len(self.operation_order) - 1:
+                if self.skip_unused_anchor_embed:
+                    anchor_embed = None
+                elif i != len(self.operation_order) - 1:
                     anchor_embed = self.anchor_encoder(anchor)
             elif "densify" in op:
-                anchor, gaussian, instance_feature = self.layers[i](
-                    instance_feature,
-                    anchor,
-                    gaussian
-                )
-
-                densify_prediction = {'gaussian': gaussian}
+                terminal = (self.terminal_densify and i == len(self.operation_order) - 1
+                            and type(self.layers[i]) is DensifyOnly)
+                if terminal:
+                    gaussian, delta = self.layers[i](instance_feature, anchor, gaussian, terminal=True)
+                    densify_prediction = dict(gaussian=gaussian, delta_gaussian=delta,
+                                              densify_parent_index=len(prediction) - 1)
+                else:
+                    anchor, gaussian, instance_feature = self.layers[i](
+                        instance_feature, anchor, gaussian)
+                    densify_prediction = {'gaussian': gaussian}
                 if hasattr(self.layers[i], 'get_allocation_aux'):
                     allocation_aux = self.layers[i].get_allocation_aux()
                     if allocation_aux is not None:
                         densify_prediction['allocation_aux'] = allocation_aux
                 prediction.append(densify_prediction)
-                if i != len(self.operation_order) - 1:
+                if self.skip_unused_anchor_embed:
+                    anchor_embed = None
+                elif i != len(self.operation_order) - 1:
                     anchor_embed = self.anchor_encoder(anchor)
             elif "query" in op:
                 instance_feature = self.layers[i](
