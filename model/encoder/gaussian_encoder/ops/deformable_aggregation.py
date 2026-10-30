@@ -4,6 +4,38 @@ from torch.autograd.function import Function, once_differentiable
 from . import deformable_aggregation_ext
 
 
+class DeformableAggregationSumFunction(Function):
+    """DAF + per-query keypoint sum without a [B,N*K,C] intermediate."""
+
+    @staticmethod
+    def forward(ctx, feature, shape, starts, location, weights, points_per_query):
+        if not hasattr(deformable_aggregation_ext, 'deformable_aggregation_sum_forward'):
+            raise RuntimeError(
+                'Rebuild DAF for fuse_point_sum=True: cd '
+                'model/encoder/gaussian_encoder/ops && '
+                'python3.10 setup.py build_ext --inplace')
+        values = (feature.contiguous().float(), shape.contiguous().int(),
+                  starts.contiguous().int(), location.contiguous().float(),
+                  weights.contiguous().float())
+        output = deformable_aggregation_ext.deformable_aggregation_sum_forward(
+            *values, points_per_query)
+        ctx.save_for_backward(*values)
+        ctx.points_per_query = points_per_query
+        return output
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, grad_output):
+        feature, shape, starts, location, weights = ctx.saved_tensors
+        grad_feature = torch.zeros_like(feature)
+        grad_location = torch.zeros_like(location)
+        grad_weights = torch.zeros_like(weights)
+        deformable_aggregation_ext.deformable_aggregation_sum_backward(
+            feature, shape, starts, location, weights, grad_output.contiguous().float(),
+            grad_feature, grad_location, grad_weights, ctx.points_per_query)
+        return grad_feature, None, None, grad_location, grad_weights, None
+
+
 class DeformableAggregationFunction(Function):
     @staticmethod
     def forward(

@@ -300,10 +300,12 @@ class LoadMultiViewImageFromFiles(object):
             Defaults to 'unchanged'.
     """
 
-    def __init__(self, to_float32=False, color_type='unchanged', crop_size=None):
+    def __init__(self, to_float32=False, color_type='unchanged', crop_size=None,
+                 keep_original=True):
         self.to_float32 = to_float32
         self.color_type = color_type
         self.crop_size = crop_size
+        self.keep_original = keep_original
 
     def __call__(self, results):
         """Call function to load multi-view image from files.
@@ -335,7 +337,8 @@ class LoadMultiViewImageFromFiles(object):
         # unravel to list, see `DefaultFormatBundle` in formatting.py
         # which will transpose each image separately and then stack into array
         results['img'] = [img[..., i] for i in range(img.shape[-1])]
-        results['ori_img'] = deepcopy(img)
+        if self.keep_original:
+            results['ori_img'] = deepcopy(img)
         results['img_shape'] = img.shape
         results['ori_shape'] = img.shape
         # Set initial values for default meta_keys
@@ -681,7 +684,8 @@ class LoadOccupancyOcc3D(object):
                  use_sweeps=False,
                  perturb=False,
                  model_coord=None,
-                 train_mask_type='none'):
+                 train_mask_type='none',
+                 defer_xyz=False):
         self.occ3d_path = occ3d_path
         self.semantic = semantic
         self.use_ego = use_ego
@@ -689,13 +693,19 @@ class LoadOccupancyOcc3D(object):
         self.perturb = perturb
         self.model_coord = model_coord
         self.train_mask_type = train_mask_type
+        self.defer_xyz = defer_xyz
+        if defer_xyz and (perturb or not (model_coord == 'ego' or (model_coord is None and not use_ego))):
+            raise ValueError('defer_xyz only supports the unperturbed fixed ego Occ3D grid')
+        self.static_occ_grid = dict(origin=list(pc_range[:3]), shape=[200, 200, 16],
+                                    resolution=float(grid_size))
         if self.model_coord is not None:
             assert self.model_coord in ('ego', 'lidar')
         assert self.train_mask_type in (
             'none', 'camera', 'lidar', 'camera_lidar', 'nonempty')
 
-        xyz = self.get_meshgrid(pc_range, [200, 200, 16], grid_size)
-        self.xyz = np.concatenate([xyz, np.ones_like(xyz[..., :1])], axis=-1)
+        if not defer_xyz:
+            xyz = self.get_meshgrid(pc_range, [200, 200, 16], grid_size)
+            self.xyz = np.concatenate([xyz, np.ones_like(xyz[..., :1])], axis=-1)
         
         # 预加载映射关系
         self.timestamp_to_sample = self._load_timestamp_to_sample()
@@ -828,6 +838,9 @@ class LoadOccupancyOcc3D(object):
         else:
             raise FileNotFoundError(f"Occ3D标注文件不存在: {label_file}")
 
+        if self.defer_xyz:
+            results['static_occ_grid'] = self.static_occ_grid
+            return results
         xyz = self.xyz.copy()
         if getattr(self, "perturb", False):
             norm_distribution = np.clip(np.random.randn(*xyz.shape[:-1], 3) / 6, -0.5, 0.5)

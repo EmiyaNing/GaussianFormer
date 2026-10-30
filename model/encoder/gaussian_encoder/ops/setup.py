@@ -53,6 +53,8 @@ if __name__ == "__main__":
                 sources=[
                     f"src/deformable_aggregation.cpp",
                     f"src/deformable_aggregation_cuda.cu",
+                    "src/image_affine.cu",
+                    "src/normalized_sampling.cu",
                 ],
             ),
         ],

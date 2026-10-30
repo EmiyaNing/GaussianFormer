@@ -1,1 +1,2 @@
 from .deformable_aggregation import DeformableAggregationFunction
+from .deformable_aggregation import DeformableAggregationSumFunction

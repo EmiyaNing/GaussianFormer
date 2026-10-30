@@ -18,6 +18,9 @@ class BEVSegmentor(CustomBaseSegmentor):
         freeze_encoder_anchor_encoder=False,
         img_backbone_out_indices=[1, 2, 3],
         extra_img_backbone=None,
+        image_backbone_bf16=False,
+        image_channels_last=False,
+        image_frozen_bn=False,
         # use_post_fusion=False,
         **kwargs,
     ):
@@ -30,6 +33,13 @@ class BEVSegmentor(CustomBaseSegmentor):
         self.freeze_encoder_except_densify = freeze_encoder_except_densify
         self.freeze_encoder_anchor_encoder = freeze_encoder_anchor_encoder
         self.img_backbone_out_indices = img_backbone_out_indices
+        self.image_backbone_bf16 = image_backbone_bf16
+        self.image_channels_last = image_channels_last
+        if image_frozen_bn:
+            from .image_execution import convert_image_batch_norm
+            convert_image_batch_norm(self.img_backbone)
+        if image_channels_last:
+            self.img_backbone.to(memory_format=torch.channels_last)
         # self.use_post_fusion = use_post_fusion
 
         if freeze_img_backbone:
@@ -69,16 +79,27 @@ class BEVSegmentor(CustomBaseSegmentor):
 
         B, N, C, H, W = imgs.size()
         imgs = imgs.reshape(B * N, C, H, W)
-        if self.freeze_img_backbone:
-            with torch.no_grad():
+        if self.image_channels_last:
+            imgs = imgs.contiguous(memory_format=torch.channels_last)
+        if not self.image_backbone_bf16:
+            imgs = imgs.float()
+        with torch.autocast(device_type=imgs.device.type, dtype=torch.bfloat16,
+                            enabled=self.image_backbone_bf16):
+            if self.freeze_img_backbone:
+                with torch.no_grad():
+                    img_feats_backbone = self.img_backbone(imgs)
+            else:
                 img_feats_backbone = self.img_backbone(imgs)
-        else:
-            img_feats_backbone = self.img_backbone(imgs)
         if isinstance(img_feats_backbone, dict):
             img_feats_backbone = list(img_feats_backbone.values())
         img_feats = []
         for idx in self.img_backbone_out_indices:
-            img_feats.append(img_feats_backbone[idx])
+            feature = img_feats_backbone[idx]
+            # FPN skips levels below start_level. Avoid converting its unused
+            # largest input; the neck and every geometry/loss path stay FP32.
+            if self.image_backbone_bf16 and len(img_feats) >= getattr(self.img_neck, 'start_level', 0):
+                feature = feature.float()
+            img_feats.append(feature)
         if self.freeze_img_neck:
             with torch.no_grad():
                 img_feats = self.img_neck(img_feats)

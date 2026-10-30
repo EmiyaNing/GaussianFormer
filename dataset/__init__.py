@@ -10,6 +10,7 @@ from .sparseworld_strict import (NuScenesSparseWorldStrictDataset,
                                  LoadSparseWorldFutureOccupancy)
 from .transform_3d import *
 from .opus_temporal_history import LoadOPUSV1ImageHistory
+from .react_voxel import PrepareReactVoxels
 from .sampler import CustomDistributedSampler
 from .utils import custom_collate_fn_temporal
 
@@ -25,6 +26,17 @@ def _seed_worker(worker_id, base_seed):
     random.seed(worker_seed)
     np.random.seed(worker_seed)
     torch.manual_seed(worker_seed)
+
+
+def loader_worker_options(settings):
+    """Only pass multiprocessing options when DataLoader has workers."""
+    options = dict(num_workers=settings.get('num_workers', 0),
+                   pin_memory=settings.get('pin_memory', True))
+    if options['num_workers'] > 0:
+        for name in ('persistent_workers', 'prefetch_factor', 'multiprocessing_context'):
+            if name in settings:
+                options[name] = settings[name]
+    return options
 
 
 def get_dataloader(
@@ -72,10 +84,9 @@ def get_dataloader(
             collate_fn=custom_collate_fn_temporal,
             shuffle=False,
             sampler=val_sampler,
-            num_workers=val_loader["num_workers"],
             worker_init_fn=worker_init_fn,
             generator=generator,
-            pin_memory=True)
+            **loader_worker_options(val_loader))
 
         return None, val_dataset_loader
 
@@ -103,20 +114,18 @@ def get_dataloader(
         collate_fn=custom_collate_fn_temporal,
         shuffle=False if dist else train_loader["shuffle"],
         sampler=train_sampler,
-        num_workers=train_loader["num_workers"],
         worker_init_fn=worker_init_fn,
         generator=generator,
-        pin_memory=True)
+        **loader_worker_options(train_loader))
     val_dataset_loader = DataLoader(
         dataset=val_wrapper,
         batch_size=val_loader["batch_size"],
         collate_fn=custom_collate_fn_temporal,
         shuffle=False,
         sampler=val_sampler,
-        num_workers=val_loader["num_workers"],
         worker_init_fn=worker_init_fn,
         generator=generator,
-        pin_memory=True)
+        **loader_worker_options(val_loader))
 
     return train_dataset_loader, val_dataset_loader
 

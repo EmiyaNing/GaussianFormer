@@ -1,6 +1,39 @@
 import numpy as np
 from pyquaternion import Quaternion
 import torch
+from collections import OrderedDict
+
+
+_OCC_GRID_CACHE = OrderedDict()
+
+
+def static_occ_grid_to_device(specs, device):
+    """Construct the exact CPU float32 reference grid once per spec/device.
+
+    The explicit pipeline marker is emitted only for unperturbed ego grids;
+    arbitrary/augmented occ_xyz tensors continue through the normal transfer.
+    """
+    if not specs or any(spec != specs[0] for spec in specs):
+        raise ValueError('A static Occ3D batch must have one grid specification')
+    spec = specs[0]
+    device = torch.device(device) if not isinstance(device, int) else torch.device('cuda', device)
+    if device.type == 'cuda' and device.index is None:
+        device = torch.device('cuda', torch.cuda.current_device())
+    key = (tuple(spec['origin']), tuple(spec['shape']), spec['resolution'], device)
+    grid = _OCC_GRID_CACHE.get(key)
+    if grid is None:
+        # Keep the original operation order and rounding instead of fusing
+        # arange/scale/offset on GPU. Construction is outside the hot path.
+        with torch.inference_mode(False), torch.no_grad():
+            axes = [torch.arange(size, dtype=torch.float32) * spec['resolution'] +
+                    .5 * spec['resolution'] + origin
+                    for size, origin in zip(spec['shape'], spec['origin'])]
+            grid = torch.stack(torch.meshgrid(*axes, indexing='ij'), -1).to(device)
+        _OCC_GRID_CACHE[key] = grid
+        if len(_OCC_GRID_CACHE) > 8:
+            _OCC_GRID_CACHE.popitem(last=False)
+    _OCC_GRID_CACHE.move_to_end(key)
+    return grid.unsqueeze(0).expand(len(specs), *grid.shape)
 
 
 def get_rm(angle, axis, deg=False):
@@ -62,7 +95,22 @@ def get_lidar2global(calib_dict, pose_dict):
 def custom_collate_fn_temporal(instances):
     return_dict = {}
     for k, v in instances[0].items():
-        if k == 'lidar_points':
+        if k == 'react_voxels':
+            prepared = [instance[k] for instance in instances]
+            spec = prepared[0]['spec']
+            if any(item['spec'] != spec for item in prepared):
+                raise ValueError('A React batch must use one voxelization specification')
+            coordinates = []
+            for batch_index, item in enumerate(prepared):
+                coords = torch.as_tensor(item['voxel_coords'], dtype=torch.int32)
+                prefix = coords.new_full((len(coords), 1), batch_index)
+                coordinates.append(torch.cat([prefix, coords], dim=1))
+            return_dict[k] = dict(
+                voxels=torch.cat([torch.as_tensor(item['voxels']) for item in prepared]),
+                voxel_num_points=torch.cat([torch.as_tensor(item['voxel_num_points'])
+                                            for item in prepared]),
+                voxel_coords=torch.cat(coordinates), spec=spec)
+        elif k == 'lidar_points':
             # Sweeps contain a different number of points per sample. Keep the
             # batch ragged; sparse voxelization is performed sample by sample.
             return_dict[k] = [instance[k] for instance in instances]
@@ -82,3 +130,26 @@ def custom_collate_fn_temporal(instances):
         else:
             raise NotImplementedError
     return return_dict
+
+
+def move_batch_to_device(batch, device, non_blocking=False):
+    """Transfer tensors and prepared voxels; retain raw LiDAR on the CPU.
+
+    Other metadata containers keep the existing training-loop behavior. Raw
+    ragged points must not be uploaded only to be read by the CPU voxelizer.
+    """
+    result = {}
+    for key, value in batch.items():
+        if key == 'static_occ_grid':
+            if 'occ_xyz' in batch:
+                raise ValueError('Specify either occ_xyz or static_occ_grid')
+            result['occ_xyz'] = static_occ_grid_to_device(value, device)
+            continue
+        if isinstance(value, torch.Tensor):
+            value = value.to(device, non_blocking=non_blocking)
+        elif key == 'react_voxels':
+            value = {name: tensor.to(device, non_blocking=non_blocking)
+                     if isinstance(tensor, torch.Tensor) else tensor
+                     for name, tensor in value.items()}
+        result[key] = value
+    return result

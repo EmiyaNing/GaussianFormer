@@ -13,8 +13,8 @@ class PreparedReactAggregator(LocalAggregator):
         super().__init__(*args, **kwargs)
         self.validate_inputs = validate_inputs
 
-    def forward(self, pts, means3D, opacities, semantics, scales, cov3D,
-                points_int=None):
+    def _prepare_inputs(self, pts, means3D, opacities, semantics, scales, cov3D,
+                        points_int=None):
         if pts.shape[0] != 1 or pts.requires_grad:
             raise ValueError('React rendering requires one batch of fixed query points')
         pts = pts.squeeze(0)
@@ -34,5 +34,10 @@ class PreparedReactAggregator(LocalAggregator):
         inverse = cov3D.flatten(1)[:, [0, 4, 8, 1, 5, 2]]
         if self.inv_softmax:
             raise NotImplementedError('inverse softmax is not supported by React')
-        return _LocalAggregate.apply(pts, points_int, means3D, means_int, opacities,
-                                     semantics, radii, inverse, self.H, self.W, self.D)
+        return pts, points_int, means3D, means_int, opacities, semantics, radii, inverse
+
+    def forward(self, pts, means3D, opacities, semantics, scales, cov3D,
+                points_int=None):
+        arguments = self._prepare_inputs(pts, means3D, opacities, semantics,
+                                        scales, cov3D, points_int)
+        return _LocalAggregate.apply(*arguments, self.H, self.W, self.D)

@@ -1,5 +1,6 @@
 from typing import List, Optional
 import torch, torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from mmseg.registry import MODELS
 from mmengine import build_from_cfg
@@ -29,6 +30,8 @@ class GaussianOccEncoder(BaseEncoder):
         cache_image_features=False,
         skip_unused_anchor_embed=False,
         terminal_densify=False,
+        checkpoint_ffn=False,
+        checkpoint_deformable=False,
         **kwargs,
     ):
         super().__init__(init_cfg)
@@ -36,6 +39,8 @@ class GaussianOccEncoder(BaseEncoder):
         self.cache_image_features = cache_image_features
         self.skip_unused_anchor_embed = skip_unused_anchor_embed
         self.terminal_densify = terminal_densify
+        self.checkpoint_ffn = checkpoint_ffn
+        self.checkpoint_deformable = checkpoint_deformable
 
         if operation_order is None:
             operation_order = [
@@ -114,7 +119,11 @@ class GaussianOccEncoder(BaseEncoder):
                     instance_feature,
                     anchor)
             elif op == "norm" or op == "ffn":
-                instance_feature = self.layers[i](instance_feature)
+                if (op == 'ffn' and self.checkpoint_ffn and self.training and torch.is_grad_enabled()):
+                    instance_feature = checkpoint(self.layers[i], instance_feature,
+                                                  use_reentrant=False, preserve_rng_state=True)
+                else:
+                    instance_feature = self.layers[i](instance_feature)
             elif op == "identity":
                 identity = instance_feature
             elif op == "add":
@@ -129,14 +138,14 @@ class GaussianOccEncoder(BaseEncoder):
                         formatted_features[cameras] = (
                             prepared[0].contiguous().float(), prepared[1].int(), prepared[2].int())
                     extra['formatted_feature_maps'] = formatted_features[cameras]
-                instance_feature = self.layers[i](
-                    instance_feature,
-                    anchor,
-                    anchor_embed,
-                    feature_maps,
-                    metas,
-                    **extra,
-                )
+                if (op == 'deformable' and self.checkpoint_deformable and
+                        self.training and torch.is_grad_enabled()):
+                    instance_feature = checkpoint(
+                        layer, instance_feature, anchor, anchor_embed, feature_maps, metas,
+                        use_reentrant=False, preserve_rng_state=True, **extra)
+                else:
+                    instance_feature = layer(instance_feature, anchor, anchor_embed,
+                                             feature_maps, metas, **extra)
             elif "refine" in op:
                 anchor, gaussian = self.layers[i](
                     instance_feature,

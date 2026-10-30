@@ -27,6 +27,7 @@ class GaussianHead(BaseTaskHead):
         separate_empty=False,
         incremental_densify=False,
         cache_render_grid=False,
+        react_renderer='legacy',
         **kwargs,
     ):
         super().__init__(init_cfg)
@@ -38,6 +39,10 @@ class GaussianHead(BaseTaskHead):
         self.separate_empty = separate_empty
         self.incremental_densify = incremental_densify
         self.cache_render_grid = cache_render_grid
+        if react_renderer not in ('legacy', 'tiled'):
+            raise ValueError('react_renderer must be legacy or tiled')
+        if react_renderer != 'legacy' and not use_localagg_react:
+            raise ValueError('react_renderer requires use_localagg_react=True')
         if (separate_empty or incremental_densify or cache_render_grid) and not use_localagg_react:
             raise ValueError('React execution optimizations require the additive React renderer')
         if separate_empty and not with_empty:
@@ -45,7 +50,10 @@ class GaussianHead(BaseTaskHead):
         self.register_buffer('_cached_points_int', torch.empty(0, dtype=torch.int32), persistent=False)
         self.register_buffer('_cached_empty_weights', torch.empty(0), persistent=False)
         if use_localagg_react:
-            if analytic_covariance or separate_empty or incremental_densify or cache_render_grid:
+            if react_renderer == 'tiled':
+                from .react_tiled_aggregate import TiledReactAggregator
+                self.aggregator = TiledReactAggregator(**cuda_kwargs)
+            elif analytic_covariance or separate_empty or incremental_densify or cache_render_grid:
                 from .react_local_aggregate import PreparedReactAggregator
                 self.aggregator = PreparedReactAggregator(**cuda_kwargs)
             else:

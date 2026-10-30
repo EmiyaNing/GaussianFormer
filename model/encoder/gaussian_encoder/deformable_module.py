@@ -3,6 +3,7 @@ from mmengine.model import BaseModule
 from mmengine import build_from_cfg
 from mmengine.model import xavier_init, constant_init
 import torch, torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from typing import List, Optional
 from ...utils.safe_ops import safe_sigmoid
@@ -10,8 +11,12 @@ from ...utils.utils import get_rotation_matrix
 from .utils import linear_relu_ln
 try:
     from .ops import DeformableAggregationFunction as DAF
+    from .ops import DeformableAggregationSumFunction as DAFSum
+    from .ops.masked_softmax import normalize_weights
 except:
     DAF = None
+    DAFSum = None
+    normalize_weights = None
 
 
 @MODELS.register_module()
@@ -104,6 +109,12 @@ class DeformableFeatureAggregation(BaseModule):
         use_deformable_func=False,
         use_camera_embed=False,
         residual_mode="add",
+        fuse_point_sum=False,
+        batched_projection=False,
+        factor_camera_weights=False,
+        compact_weight_mask=False,
+        fused_weight_softmax=False,
+        fuse_normalized_sampling=False,
     ):
         super(DeformableFeatureAggregation, self).__init__()
         if embed_dims % num_groups != 0:
@@ -120,6 +131,14 @@ class DeformableFeatureAggregation(BaseModule):
         assert self.use_deformable_func
         self.attn_drop = attn_drop
         self.residual_mode = residual_mode
+        self.fuse_point_sum = fuse_point_sum
+        self.batched_projection = batched_projection
+        self.factor_camera_weights = factor_camera_weights
+        self.compact_weight_mask = compact_weight_mask
+        self.fused_weight_softmax = fused_weight_softmax
+        self.fuse_normalized_sampling = fuse_normalized_sampling
+        if fuse_normalized_sampling and (not use_camera_embed or not fuse_point_sum):
+            raise ValueError('fuse_normalized_sampling requires camera embedding and fuse_point_sum')
         self.proj_drop = nn.Dropout(proj_drop)
         kps_generator["embed_dims"] = embed_dims
         self.kps_generator = build_from_cfg(kps_generator, MODELS)
@@ -163,6 +182,31 @@ class DeformableFeatureAggregation(BaseModule):
                 feature_maps_clip = [fm[:, :self.num_cams].clone() for fm in feature_maps]
                 feature_maps_clip = DAF.feature_maps_format(feature_maps_clip)
 
+        if self.fuse_normalized_sampling:
+            from .ops.normalized_sampling import NormalizedSampling
+            camera_embed = self.camera_encoder(metas['projection_mat'][:, :self.num_cams, :3]
+                                              .reshape(bs, self.num_cams, -1))
+            query_logits = self.weights_fc(instance_feature + anchor_embed).reshape(
+                bs, num_anchor, self.num_levels, self.num_pts, self.num_groups)
+            camera_logits = F.linear(camera_embed, self.weights_fc.weight).reshape(
+                bs, self.num_cams, self.num_levels, self.num_pts, self.num_groups)
+            if self.training and self.attn_drop > 0:
+                # Same shape/order/number of random draws as _get_weights.
+                dropout = torch.rand((bs, num_anchor, self.num_cams, self.num_levels,
+                                      self.num_pts, self.num_groups),
+                                     device=query_logits.device, dtype=query_logits.dtype) > self.attn_drop
+            else:
+                dropout = torch.empty(0, device=query_logits.device, dtype=torch.bool)
+            project = self.project_points_batched if self.batched_projection else self.project_points
+            image_wh = metas.get('image_wh')
+            locations, visible = project(key_points, metas['projection_mat'][:, :self.num_cams],
+                                         image_wh[:, :self.num_cams] if image_wh is not None else None)
+            locations = locations.permute(0, 2, 3, 1, 4).reshape(
+                bs, num_anchor * self.num_pts, self.num_cams, 2)
+            features = NormalizedSampling.apply(*feature_maps_clip, locations,
+                         visible.permute(0, 2, 3, 1), dropout, query_logits, camera_logits)
+            return self._finish(features, instance_feature)
+
         for (
             temp_feature_maps,
             temp_metas,
@@ -203,7 +247,8 @@ class DeformableFeatureAggregation(BaseModule):
                     )
                 )
                 image_wh = temp_metas.get("image_wh")
-                points_2d, mask = self.project_points(
+                project = self.project_points_batched if self.batched_projection else self.project_points
+                points_2d, mask = project(
                     temp_key_points,
                     temp_metas["projection_mat"][:, :self.num_cams],
                     image_wh[:, :self.num_cams] if image_wh is not None else None,
@@ -212,24 +257,27 @@ class DeformableFeatureAggregation(BaseModule):
                     bs, num_anchor * self.num_pts, self.num_cams, 2)
                 mask = mask.permute(0, 2, 3, 1)
                 mask = mask[..., None, None] & weight_mask
-                all_miss = mask.sum(dim=[2, 3, 4], keepdim=True) == 0
-                all_miss = all_miss.expand(-1, -1, self.num_pts, self.num_cams, self.num_levels, -1)
-                weights[~mask] = - torch.inf
-                weights[all_miss] = 0.
-                weights = weights.flatten(2, 4).softmax(dim=-2).reshape(
-                    bs,
-                    num_anchor * self.num_pts,
-                    self.num_cams,
-                    self.num_levels,
-                    self.num_groups)
-                # weights_clone = weights.detach().clone()
-                # weights_clone[~all_miss.flatten(1, 2)] = 0.
-                # weights = weights - weights_clone
-                weights = weights * (1 - all_miss.flatten(1, 2).float())
+                if self.compact_weight_mask or self.fused_weight_softmax:
+                    weights = normalize_weights(weights, mask, fused=self.fused_weight_softmax)
+                    weights = weights.reshape(bs, num_anchor * self.num_pts, self.num_cams,
+                                              self.num_levels, self.num_groups)
+                else:
+                    all_miss = mask.sum(dim=[2, 3, 4], keepdim=True) == 0
+                    all_miss = all_miss.expand(-1, -1, self.num_pts, self.num_cams, self.num_levels, -1)
+                    weights[~mask] = - torch.inf
+                    weights[all_miss] = 0.
+                    weights = weights.flatten(2, 4).softmax(dim=-2).reshape(
+                        bs, num_anchor * self.num_pts, self.num_cams,
+                        self.num_levels, self.num_groups)
+                    weights = weights * (1 - all_miss.flatten(1, 2).float())
 
-                temp_features_next = DAF.apply(
-                    *temp_feature_maps, points_2d, weights
-                ).reshape(bs, num_anchor, self.num_pts, self.embed_dims)
+                if self.fuse_point_sum:
+                    temp_features_next = DAFSum.apply(
+                        *temp_feature_maps, points_2d, weights, self.num_pts)
+                else:
+                    temp_features_next = DAF.apply(
+                        *temp_feature_maps, points_2d, weights
+                    ).reshape(bs, num_anchor, self.num_pts, self.embed_dims)
             else:
                 temp_features_next = self.feature_sampling(
                     temp_feature_maps,
@@ -243,7 +291,11 @@ class DeformableFeatureAggregation(BaseModule):
 
             features = temp_features_next
 
-        features = features.sum(dim=2)  # fuse multi-point features
+        if not (self.use_deformable_func and self.fuse_point_sum):
+            features = features.sum(dim=2)  # fuse multi-point features
+        return self._finish(features, instance_feature)
+
+    def _finish(self, features, instance_feature):
         output = self.proj_drop(self.output_proj(features))
         if self.residual_mode == "add":
             output = output + instance_feature
@@ -260,10 +312,17 @@ class DeformableFeatureAggregation(BaseModule):
                     bs, self.num_cams, -1
                 )
             )
-            feature = feature[:, :, None] + camera_embed[:, None]
+            if self.factor_camera_weights:
+                # W(f+c)+b = (Wf+b)+Wc; retain the original parameters/bias.
+                weights = (self.weights_fc(feature)[:, :, None] +
+                           F.linear(camera_embed, self.weights_fc.weight)[:, None])
+            else:
+                feature = feature[:, :, None] + camera_embed[:, None]
+                weights = self.weights_fc(feature)
+        else:
+            weights = self.weights_fc(feature)
         weights = (
-            self.weights_fc(feature)
-            .reshape(bs, num_anchor, -1, self.num_groups)
+            weights.reshape(bs, num_anchor, -1, self.num_groups)
             # .softmax(dim=-2)
             .reshape(
                 bs,
@@ -307,6 +366,24 @@ class DeformableFeatureAggregation(BaseModule):
         mask = (depth > 1e-5) & (points_2d[..., 0] > 0) & (points_2d[..., 0] < 1) & \
                                 (points_2d[..., 1] > 0) & (points_2d[..., 1] < 1)
         return points_2d, mask
+
+    @staticmethod
+    def project_points_batched(key_points, projection_mat, image_wh=None):
+        bs, anchors, points = key_points.shape[:3]
+        cameras = projection_mat.shape[1]
+        homogeneous = torch.cat([key_points, torch.ones_like(key_points[..., :1])], -1)
+        # Fold cameras into matrix rows, rather than into a per-point batch.
+        # Backward saves [B,V*4,4], not [B*V*N*K,4,4].
+        projected = torch.bmm(projection_mat.reshape(bs, cameras * 4, 4),
+                              homogeneous.reshape(bs, anchors * points, 4).transpose(1, 2))
+        projected = projected.reshape(bs, cameras, 4, anchors, points).permute(0, 1, 3, 4, 2)
+        depth = projected[..., 2]
+        coordinates = projected[..., :2] / torch.clamp(projected[..., 2:3], min=1e-5)
+        if image_wh is not None:
+            coordinates = coordinates / image_wh[:, :, None, None]
+        mask = ((depth > 1e-5) & (coordinates[..., 0] > 0) & (coordinates[..., 0] < 1) &
+                (coordinates[..., 1] > 0) & (coordinates[..., 1] < 1))
+        return coordinates, mask
 
     @staticmethod
     def feature_sampling(

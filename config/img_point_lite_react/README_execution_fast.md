@@ -1,5 +1,7 @@
 # React 执行效率优化：第一轮
 
+第二轮配置与 CUDA 编译说明见 [README_execution_fast_v2.md](README_execution_fast_v2.md)。
+
 入口配置：`img_voxel_react_occ3d_fast.py`，继承原 `img_voxel_react_occ3d.py`。
 模型参数及 checkpoint 键保持兼容；图像分辨率、数据、历史帧数、Gaussian 数量、
 采样点数、精度设置、CE/Lovasz 和三层监督均沿用父配置。原配置各开关默认关闭。

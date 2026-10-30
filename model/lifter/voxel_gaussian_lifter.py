@@ -59,13 +59,15 @@ class GaussianVoxelLearnear(BaseLifter):
         self.voxel_size = voxel_size
         self.occ_resolution = occ_resolution
 
-        self.lidar_processor = VoxelGeneratorWrapper(
-            vsize_xyz=[voxel_size / 8, voxel_size / 8, voxel_size / 8],
-            coors_range_xyz=pc_range,
+        self.voxel_spec = dict(
+            vsize_xyz=[voxel_size / 8] * 3,
+            coors_range_xyz=list(pc_range),
             num_point_features=4,
             max_num_points_per_voxel=5,
             max_num_voxels=1600000
         )
+        # Defer the sizeable native buffers when data workers prepare voxels.
+        self._lidar_processor = None
 
         self.lidar_backbone  = VoxelResBackBone8x(4, embed_dims, [128, 1600, 1600])
         self.lidar_vfe       = MeanVFE(num_point_features = 4)
@@ -86,9 +88,25 @@ class GaussianVoxelLearnear(BaseLifter):
         #    torch.nn.init.xavier_uniform_(self.instance_feature.data, gain=1)
         pass
 
+    @property
+    def lidar_processor(self):
+        if self._lidar_processor is None:
+            self._lidar_processor = VoxelGeneratorWrapper(**self.voxel_spec)
+        return self._lidar_processor
+
+    @lidar_processor.setter
+    def lidar_processor(self, value):
+        self._lidar_processor = value
+
     def process_lidar_data(self, metas):
-        batch_size = len(metas['lidar_points'])
         device     = next(self.parameters()).device
+        if 'react_voxels' in metas:
+            prepared = metas['react_voxels']
+            if prepared['spec'] != self.voxel_spec:
+                raise ValueError('Prepared React voxels do not match the model voxelizer')
+            return {key: prepared[key].to(device, non_blocking=True)
+                    for key in ('voxels', 'voxel_num_points', 'voxel_coords')}
+        batch_size = len(metas['lidar_points'])
         voxel_dict = dict()
         voxel_dict['all_voxels']       = []
         voxel_dict['all_num_ponts']    = []
