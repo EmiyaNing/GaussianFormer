@@ -15,3 +15,4 @@ from .adaptive_allocation_v6_loss import AdaptiveAllocationV6Loss
 from .sparseworld_strict_loss import SparseWorldStrictLoss
 from .sparseworld_gaussian_point_occupancy_loss import SparseWorldGaussianPointOccupancyLoss
 from .active_set_loss import ActiveSetOccupancyLoss
+from .react_world_loss import ReactWorldLoss

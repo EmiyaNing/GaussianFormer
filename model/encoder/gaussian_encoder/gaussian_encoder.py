@@ -99,6 +99,7 @@ class GaussianOccEncoder(BaseEncoder):
         ms_img_feats=None,
         metas=None,
         multi_stride_features=None,
+        return_gaussian_features=False,
         **kwargs
     ):
         feature_maps = ms_img_feats
@@ -162,7 +163,12 @@ class GaussianOccEncoder(BaseEncoder):
                 terminal = (self.terminal_densify and i == len(self.operation_order) - 1
                             and type(self.layers[i]) is DensifyOnly)
                 if terminal:
-                    gaussian, delta = self.layers[i](instance_feature, anchor, gaussian, terminal=True)
+                    if return_gaussian_features:
+                        gaussian, delta, instance_feature = self.layers[i](
+                            instance_feature, anchor, gaussian,
+                            terminal=True, return_features=True)
+                    else:
+                        gaussian, delta = self.layers[i](instance_feature, anchor, gaussian, terminal=True)
                     densify_prediction = dict(gaussian=gaussian, delta_gaussian=delta,
                                               densify_parent_index=len(prediction) - 1)
                 else:
@@ -192,4 +198,9 @@ class GaussianOccEncoder(BaseEncoder):
             else:
                 raise NotImplementedError(f"{op} is not supported.")
 
-        return {"representation": prediction}
+        result = {"representation": prediction}
+        if return_gaussian_features:
+            if instance_feature.shape[:2] != prediction[-1]['gaussian'].means.shape[:2]:
+                raise ValueError('Exported features must match the final Gaussian ordering')
+            result['gaussian_features'] = instance_feature
+        return result

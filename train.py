@@ -129,6 +129,7 @@ def main(local_rank, args):
     # build model
     import model
     from dataset import get_dataloader
+    from dataset.utils import move_batch_to_device
     from loss import OPENOCC_LOSS
 
     my_model = build_segmentor(cfg.model)
@@ -183,6 +184,9 @@ def main(local_rank, args):
         # Most historical configs use the repository's 1e-6 warm-up start.
         # A configuration can opt into a different start without changing the
         # scheduler behavior of configurations that omit this field.
+        if cfg.get('proportional_lr_groups', False):
+            from misc.lr_groups import prepare_proportional_lr_groups
+            prepare_proportional_lr_groups(optimizer, cfg.optimizer['optimizer']['lr'])
         warmup_lr_init = cfg.get('warmup_lr_init', 1e-6)
         scheduler = CosineLRScheduler(
             optimizer,
@@ -312,10 +316,11 @@ def main(local_rank, args):
             if cfg.get('scheduler_step_before_optimizer', False):
                 scheduler.step_update(global_iter)
 
-            for k in list(data.keys()):
-                if isinstance(data[k], torch.Tensor):
-                    data[k] = data[k].cuda()
+            data = move_batch_to_device(
+                data, 'cuda', non_blocking=cfg.get('non_blocking_transfer', False))
             input_imgs = data.pop('img')            
+            if cfg.get('log_input_shapes', False) and i_iter == 0 and local_rank == 0:
+                logger.info('[INPUT_SHAPE] train images=%s', tuple(input_imgs.shape))
             data_time_e = time.time()
 
             with torch.cuda.amp.autocast(amp):
@@ -403,6 +408,11 @@ def main(local_rank, args):
                     epoch, i_iter, len(train_dataset_loader), 
                     loss.item(), np.mean(loss_list), grad_norm, lr,
                     time_e - time_s, data_time_e - data_time_s))
+                if cfg.get('log_lr_groups', False):
+                    rates = sorted({group['lr'] for group in optimizer.param_groups
+                                    if any(p.requires_grad for p in group['params'])})
+                    logger.info('[TRAIN][LearningRates] ' + ', '.join(
+                        f'{rate:.8g}' for rate in rates))
                 detailed_loss = []
                 for loss_name, loss_value in loss_dict.items():
                     current_value = loss_value_to_float(loss_value)
@@ -459,16 +469,23 @@ def main(local_rank, args):
         val_loss_list = []
         val_detail_sum = {}
         val_detail_count = {}
+        world_metric = None
+        if cfg.get('react_world_eval', False):
+            from misc.react_world_metric import ReactWorldMetric
+            world_metric = ReactWorldMetric()
 
         with torch.no_grad():
             for i_iter_val, data in enumerate(val_dataset_loader):
-                for k in list(data.keys()):
-                    if isinstance(data[k], torch.Tensor):
-                        data[k] = data[k].cuda()
+                data = move_batch_to_device(
+                    data, 'cuda', non_blocking=cfg.get('non_blocking_transfer', False))
                 input_imgs = data.pop('img')
+                if cfg.get('log_input_shapes', False) and i_iter_val == 0 and local_rank == 0:
+                    logger.info('[INPUT_SHAPE] validation images=%s', tuple(input_imgs.shape))
                 
                 with torch.cuda.amp.autocast(amp):
                     result_dict = my_model(imgs=input_imgs, metas=data)
+                    if world_metric is not None:
+                        world_metric.add_batch(result_dict, data)
 
                     loss_input = {
                         'metas': data,
@@ -528,6 +545,9 @@ def main(local_rank, args):
                     logger.info(detailed_loss)
                         
         miou, iou2 = miou_metric._after_epoch()
+        if world_metric is not None:
+            world_metric.synchronize(torch.device('cuda', torch.cuda.current_device()))
+            logger.info('[WORLD] ' + str(world_metric.results()))
         if distributed:
             gathered_details = [None for _ in range(world_size)]
             dist.all_gather_object(

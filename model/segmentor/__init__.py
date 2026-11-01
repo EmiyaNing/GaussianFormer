@@ -5,3 +5,4 @@ from .opus_temporal_segmentor import OPUSTemporalSegmentor
 from .frozen_opus_adapter import FrozenOPUSAdapterSegmentor
 from .sparseworld_strict import SparseWorldStrict
 from .sparse_gaussian_world import SparseGaussianWorld
+from .react_gaussian_world import ReactGaussianWorld

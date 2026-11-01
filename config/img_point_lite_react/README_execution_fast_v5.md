@@ -22,6 +22,13 @@ train_dataset_config = dict(num_lidar_history=9)
 val_dataset_config = dict(num_lidar_history=9)
 ```
 
+感知器预训练可直接使用 `img_voxel_react_occ3d_fast_v5_mem_9history.py`，训练与验证
+都已设置这两项。世界模型配置统一位于
+[`../sagformer_world_model/`](../sagformer_world_model/README.md)，其中
+`img_voxel_react_occ3d_world_v1.py` 也继承此九帧历史版本。
+这两个九帧历史预设的图像尺寸已对齐云端权重为 **704×256**；原始 v5 配置与下文
+速度测量仍使用其原有的 1600×864，不能将那组测量当作 704×256 的结果。
+
 模型参数名和形状兼容原 checkpoint。固定 BN 的派生缓存不写入 checkpoint。
 BF16 会改变图像数值，兼容权重不代表训练轨迹相同。
 

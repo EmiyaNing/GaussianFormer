@@ -60,6 +60,7 @@ class DensifyOnly(BaseModule):
             anchor: torch.Tensor,
             gaussian: GaussianPrediction,
             terminal=False,
+            return_features=False,
         ):
         '''
             This module reference the gaussian refine module, 
@@ -106,7 +107,7 @@ class DensifyOnly(BaseModule):
                 filter_anchor = cur_anchor[indices]
         
             densified_feats = self.feature_proj(filter_feats)
-            if not terminal:
+            if not terminal or return_features:
                 new_features.append(densified_feats)
 
 
@@ -194,5 +195,10 @@ class DensifyOnly(BaseModule):
             delta = GaussianPrediction(means=new_means, scales=new_scales,
                                        rotations=new_rotations, opacities=new_opacitices,
                                        semantics=new_semantics)
+            if return_features:
+                # Export the features already used to generate each child.
+                # Parent/child ordering is identical to reuslt_gaussian.
+                features = torch.cat([instance_feature, torch.stack(new_features)], dim=1)
+                return reuslt_gaussian, delta, features
             return reuslt_gaussian, delta
         return result_outputs, reuslt_gaussian, result_features

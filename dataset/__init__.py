@@ -8,6 +8,7 @@ from .opus_target import PrepareOPUSTarget
 from .dataset_flow import NuScenesFlowDataset, SceneStream
 from .sparseworld_strict import (NuScenesSparseWorldStrictDataset,
                                  LoadSparseWorldFutureOccupancy)
+from .react_world import NuScenesReactWorldDataset
 from .transform_3d import *
 from .opus_temporal_history import LoadOPUSV1ImageHistory
 from .react_voxel import PrepareReactVoxels

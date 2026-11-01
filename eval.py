@@ -304,6 +304,7 @@ def main(local_rank, args):
     # build model
     import model
     from dataset import get_dataloader
+    from dataset.utils import move_batch_to_device
 
     my_model = build_segmentor(cfg.model)
     my_model.init_weights()
@@ -373,7 +374,10 @@ def main(local_rank, args):
         
     print_freq = cfg.print_freq
     strict_metric = None
-    if cfg.get('sparseworld_strict_eval', False):
+    if cfg.get('react_world_eval', False):
+        from misc.react_world_metric import ReactWorldMetric
+        strict_metric = ReactWorldMetric()
+    elif cfg.get('sparseworld_strict_eval', False):
         from misc.sparseworld_strict_eval import SparseWorldStrictMetric
         # Opt-in per-sample dump: without it a report can only quote one
         # aggregate per variant and cannot produce a bootstrap interval.
@@ -408,9 +412,8 @@ def main(local_rank, args):
     with torch.no_grad():
         for i_iter_val, data in enumerate(val_dataset_loader):
             
-            for k in list(data.keys()):
-                if isinstance(data[k], torch.Tensor):
-                    data[k] = data[k].cuda()
+            data = move_batch_to_device(
+                data, 'cuda', non_blocking=cfg.get('non_blocking_transfer', False))
             input_imgs = data.pop('img')
             result_dict = my_model(imgs=input_imgs, metas=data)
             if strict_metric is not None:
