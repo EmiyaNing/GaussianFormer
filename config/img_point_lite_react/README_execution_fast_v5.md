@@ -1,5 +1,8 @@
 # React 第五轮：图像、数据流水线和融合 DAF
 
+704×256、10 帧 LiDAR、当前＋3 帧历史图像的配置与实验见
+[四帧图像版本说明](README_image_history_4f.md)。
+
 本轮实现前面讨论的第 1–4 步。推荐速度配置
 `img_voxel_react_occ3d_fast_v5_fused.py`，低显存配置
 `img_voxel_react_occ3d_fast_v5_mem.py`。原配置和 v4 的默认行为保留。
@@ -58,11 +61,22 @@ BF16 会改变图像数值，兼容权重不代表训练轨迹相同。
 
 ## 编译与训练
 
-本机已编译。同步到四卡机器后，需在对应 PyTorch/CUDA 环境重新编译：
+本机已编译。从原始 baseline 迁移到 v5，需要在目标机器的 PyTorch/CUDA 环境
+编译两个项目内扩展。若已编译过 v3/v4 的 tiled renderer，只需更新第一个 DAF 扩展。
+
+DAF 扩展（包含融合 point sum、masked softmax，以及 v5 的固定图像 BN 仿射和
+归一化采样融合算子）：
 
 ```bash
 cd model/encoder/gaussian_encoder/ops
 MAX_JOBS=2 FORCE_CUDA=1 python3.10 setup.py build_ext --inplace
+```
+
+从项目根目录编译 tiled renderer（v3 引入，v5 继续使用）：
+
+```bash
+cd model/head/react_render_ops
+MAX_JOBS=2 python3.10 setup.py build_ext --inplace
 ```
 
 回到项目根目录运行：
@@ -71,7 +85,8 @@ MAX_JOBS=2 FORCE_CUDA=1 python3.10 setup.py build_ext --inplace
 python3.10 train.py --py-config config/img_point_lite_react/img_voxel_react_occ3d_fast_v5_fused.py --work-dir work_dirs/react_fast_v5
 ```
 
-不需要覆盖已安装的 `local_aggregate_react`；新增算子位于项目内 DAF 扩展。
+保留 baseline 已安装的 `local_aggregate_react`、spconv 和 MMCV，无需为本轮修改
+重新编译它们。`v5_mem` 的 checkpoint 使用 PyTorch，不增加额外原生扩展。
 
 ## 性能记录
 

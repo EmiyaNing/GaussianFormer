@@ -60,6 +60,7 @@ class DensifyOnly(BaseModule):
             anchor: torch.Tensor,
             gaussian: GaussianPrediction,
             terminal=False,
+            selected_indices=None,
         ):
         '''
             This module reference the gaussian refine module, 
@@ -91,11 +92,14 @@ class DensifyOnly(BaseModule):
             cur_sems  = semantics[b] # N, 17
             cur_anchor= anchor[b]
 
-            try:
-                _, indices = torch.topk(cur_opa[:, 0], self.topk_count, dim=-1)
-            except RuntimeError:
-                import pdb
-                pdb.set_trace()
+            if selected_indices is None:
+                try:
+                    _, indices = torch.topk(cur_opa[:, 0], self.topk_count, dim=-1)
+                except RuntimeError:
+                    import pdb
+                    pdb.set_trace()
+            else:
+                indices = selected_indices[b]
             filter_feats  = cur_feats[indices]
             filter_opa    = cur_opa[indices]
             filter_scales = cur_scales[indices]

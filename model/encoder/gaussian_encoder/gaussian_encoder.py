@@ -85,7 +85,10 @@ class GaussianOccEncoder(BaseEncoder):
             if self.layers[i] is None:
                 continue
             elif op != "refine":
-                for p in self.layers[i].parameters():
+                layer = self.layers[i]
+                parameters = (layer.generic_init_parameters() if hasattr(layer, 'generic_init_parameters')
+                              else layer.parameters())
+                for p in parameters:
                     if p.dim() > 1:
                         nn.init.xavier_uniform_(p)
         for m in self.modules():
@@ -131,7 +134,12 @@ class GaussianOccEncoder(BaseEncoder):
             elif op == "deformable" or op == "history":
                 extra = {}
                 layer = self.layers[i]
-                if self.cache_image_features and isinstance(layer, DeformableFeatureAggregation):
+                if getattr(layer, 'fuse_temporal_sampling', False):
+                    for name in ('temporal_img_feats', 'temporal_spatial_shapes', 'temporal_level_starts'):
+                        if name not in kwargs:
+                            raise ValueError('Fused temporal sampling requires pack_temporal_features=True')
+                        extra[name] = kwargs[name]
+                elif self.cache_image_features and isinstance(layer, DeformableFeatureAggregation):
                     cameras = layer.num_cams
                     if cameras not in formatted_features:
                         prepared = DAF.feature_maps_format([fm[:, :cameras] for fm in feature_maps])
@@ -159,9 +167,15 @@ class GaussianOccEncoder(BaseEncoder):
                 elif i != len(self.operation_order) - 1:
                     anchor_embed = self.anchor_encoder(anchor)
             elif "densify" in op:
+                if hasattr(self.layers[i], 'forward_terminal') and i != len(self.operation_order) - 1:
+                    raise ValueError('Terminal allocation must follow the final refine')
                 terminal = (self.terminal_densify and i == len(self.operation_order) - 1
                             and type(self.layers[i]) is DensifyOnly)
-                if terminal:
+                if hasattr(self.layers[i], 'forward_terminal'):
+                    densify_prediction = self.layers[i].forward_terminal(instance_feature, anchor, gaussian)
+                    gaussian = densify_prediction['gaussian']
+                    densify_prediction['densify_parent_index'] = len(prediction) - 1
+                elif terminal:
                     gaussian, delta = self.layers[i](instance_feature, anchor, gaussian, terminal=True)
                     densify_prediction = dict(gaussian=gaussian, delta_gaussian=delta,
                                               densify_parent_index=len(prediction) - 1)

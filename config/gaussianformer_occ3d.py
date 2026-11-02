@@ -7,7 +7,7 @@ _base_ = [
 # =========== Occ3D data config (ego frame) ==============
 # Occ3D labels are defined in the ego frame on a 200 x 200 x 16 grid.
 dataset_name_flag = 'occ3d'
-occ3d_eval_mask = 'camera'  # 'camera' | 'none' | 'lidar' | 'nonempty'
+occ3d_eval_mask = 'none'  # Full volume by default; opt in to 'camera', 'lidar' or 'nonempty'.
 
 data_root = 'data/nuscenes/'
 anno_root = 'data/nuscenes_cam/'

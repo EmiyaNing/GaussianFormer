@@ -21,6 +21,7 @@ class BEVSegmentor(CustomBaseSegmentor):
         image_backbone_bf16=False,
         image_channels_last=False,
         image_frozen_bn=False,
+        frozen_modules_eval=False,
         # use_post_fusion=False,
         **kwargs,
     ):
@@ -28,6 +29,8 @@ class BEVSegmentor(CustomBaseSegmentor):
 
         # self.fp16_enabled = False
         self.freeze_img_backbone = freeze_img_backbone
+        self.freeze_lifter = freeze_lifter
+        self.frozen_modules_eval = frozen_modules_eval
         self.freeze_img_neck = freeze_img_neck
         self.freeze_gaussian_head = freeze_gaussian_head
         self.freeze_encoder_except_densify = freeze_encoder_except_densify
@@ -57,6 +60,23 @@ class BEVSegmentor(CustomBaseSegmentor):
                 freeze_anchor_encoder=freeze_encoder_anchor_encoder)
         if extra_img_backbone is not None:
             self.extra_img_backbone = build_backbone(extra_img_backbone)
+
+    def train(self, mode=True):
+        super().train(mode)
+        if mode and self.frozen_modules_eval:
+            for flag, name in ((self.freeze_img_backbone,'img_backbone'),
+                               (self.freeze_img_neck,'img_neck'),(self.freeze_lifter,'lifter')):
+                if flag and getattr(self,name,None) is not None:
+                    getattr(self,name).eval()
+            if self.freeze_encoder_anchor_encoder:
+                self.encoder.anchor_encoder.eval()
+            if self.freeze_encoder_except_densify:
+                for op,layer in zip(self.encoder.operation_order,self.encoder.layers):
+                    if layer is not None and op != 'densify':
+                        layer.eval()
+            # GaussianHead.training selects the supervised outputs and gain
+            # integration; freezing its parameters must retain this behavior.
+        return self
 
     def _freeze_encoder_except_densify(self, freeze_anchor_encoder=False):
         if freeze_anchor_encoder and hasattr(self.encoder, "anchor_encoder"):

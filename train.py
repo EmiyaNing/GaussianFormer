@@ -12,6 +12,10 @@ from mmengine.utils import symlink
 from mmseg.models import build_segmentor
 from timm.scheduler import CosineLRScheduler, MultiStepLRScheduler
 from one_cycle_lr import OneCycleLR
+from misc.occ3d_eval import (
+    add_occ3d_eval_mask_argument, configure_occ3d_eval_mask,
+    get_occ3d_eval_mask_name, select_occ3d_eval_mask,
+)
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -19,46 +23,6 @@ warnings.filterwarnings("ignore")
 
 def pass_print(*args, **kwargs):
     pass
-
-
-def get_occ3d_eval_mask_name(cfg):
-    mask_name = cfg.get('occ3d_eval_mask', None)
-    if mask_name is not None:
-        return mask_name
-    return 'camera' if cfg.get('eval_mask_flag', True) else 'none'
-
-
-def select_occ3d_eval_mask(metas, idx, cfg, expected_numel=None):
-    mask_name = get_occ3d_eval_mask_name(cfg)
-    if mask_name == 'none':
-        return None
-    if mask_name == 'camera':
-        mask = metas.get('occ_cam_mask', None)
-    elif mask_name == 'lidar':
-        mask = metas.get('occ_lidar_mask', None)
-    elif mask_name == 'nonempty':
-        mask = metas.get('occ_nonempty_mask', None)
-        if mask is None:
-            mask = metas.get('occ_mask', None)
-    else:
-        raise NotImplementedError(f'Unsupported Occ3D eval mask: {mask_name}')
-
-    if mask is None:
-        return None
-    # ``metas`` is the local-rank batch, never a globally gathered batch.
-    # Select its leading batch dimension for both dense [B,X,Y,Z] and flat
-    # [B,V] masks.  A rank can have a smaller tail batch, so validate idx.
-    if mask.dim() >= 2:
-        if idx >= mask.shape[0]:
-            raise IndexError(f'Occ3D mask batch index {idx} is outside local shape {tuple(mask.shape)}')
-        mask = mask[idx]
-    mask = mask.reshape(-1).bool()
-    if expected_numel is not None and mask.numel() != expected_numel:
-        raise ValueError(
-            'Occ3D evaluation mask/prediction size mismatch on one local rank: '
-            f'mask={mask.numel()}, prediction={expected_numel}. '
-            'Check that occ masks retain [B, X, Y, Z] or [B, V] layout.')
-    return mask
 
 
 def find_nonfinite_gradients(model):
@@ -81,6 +45,8 @@ def main(local_rank, args):
     # load config
     cfg = Config.fromfile(args.py_config)
     cfg.work_dir = args.work_dir
+    if cfg.get('dataset_name_flag') == 'occ3d':
+        configure_occ3d_eval_mask(cfg, getattr(args, 'occ3d_eval_mask', None))
     seed = cfg.get('seed', 42) if args.seed is None else args.seed
     set_random_seed(seed)
     torch.backends.cudnn.deterministic = False
@@ -122,13 +88,17 @@ def main(local_rank, args):
     logger = MMLogger('selfocc', log_file=log_file)
     MMLogger._instance_dict['selfocc'] = logger
     logger.info(f'Config:\n{cfg.pretty_text}')
+    if cfg.get('dataset_name_flag') == 'occ3d':
+        logger.info(f'Occ3D evaluation mask: {get_occ3d_eval_mask_name(cfg)}')
     logger.info(f'Runtime cuDNN benchmark: {torch.backends.cudnn.benchmark}')
     logger.info('CUDA allocator configuration: ' + str(
         os.environ.get('PYTORCH_ALLOC_CONF', os.environ.get('PYTORCH_CUDA_ALLOC_CONF', 'default'))))
 
     # build model
     import model
+    from model.utils.allocation_grad_clip import clip_model_grad_norm_
     from dataset import get_dataloader
+    from dataset.utils import move_batch_to_device
     from loss import OPENOCC_LOSS
 
     my_model = build_segmentor(cfg.model)
@@ -139,7 +109,8 @@ def main(local_rank, args):
     logger.info(f'Params require grad: {[n for n, p in my_model.named_parameters() if p.requires_grad]}')
     if distributed:
         if cfg.get('syncBN', True):
-            my_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(my_model)
+            from model.segmentor.image_execution import convert_sync_batchnorm_preserving_fixed
+            my_model = convert_sync_batchnorm_preserving_fixed(my_model)
             logger.info('converted sync bn.')
 
         find_unused_parameters = cfg.get('find_unused_parameters', False)
@@ -287,7 +258,8 @@ def main(local_rank, args):
             'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
             'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
             'vegetation'],
-            True, 17, filter_minmax=False)
+            get_occ3d_eval_mask_name(cfg) != 'none', 17, filter_minmax=False,
+            name=get_occ3d_eval_mask_name(cfg))
     else:
         print("Not emplement this dataset:", cfg.dataset_name_flag)
         exit(0)
@@ -312,9 +284,8 @@ def main(local_rank, args):
             if cfg.get('scheduler_step_before_optimizer', False):
                 scheduler.step_update(global_iter)
 
-            for k in list(data.keys()):
-                if isinstance(data[k], torch.Tensor):
-                    data[k] = data[k].cuda()
+            data = move_batch_to_device(data, torch.cuda.current_device(),
+                                        cfg.get('non_blocking_transfer', False))
             input_imgs = data.pop('img')            
             data_time_e = time.time()
 
@@ -344,8 +315,9 @@ def main(local_rank, args):
                             raise FloatingPointError(
                                 f'Non-finite gradients at global_iter={global_iter}: '
                                 + ', '.join(bad_gradients[:20]))
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        my_model.parameters(), cfg.grad_max_norm,
+                    grad_norm = clip_model_grad_norm_(
+                        my_model, cfg.grad_max_norm,
+                        separate_allocation_score=cfg.get('separate_allocation_grad_clip', False),
                         error_if_nonfinite=cfg.get('fail_on_nonfinite_grad', False))
                     optimizer.step()
                     optimizer.zero_grad()
@@ -359,8 +331,9 @@ def main(local_rank, args):
                             raise FloatingPointError(
                                 f'Non-finite gradients at global_iter={global_iter}: '
                                 + ', '.join(bad_gradients[:20]))
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        my_model.parameters(), cfg.grad_max_norm,
+                    grad_norm = clip_model_grad_norm_(
+                        my_model, cfg.grad_max_norm,
+                        separate_allocation_score=cfg.get('separate_allocation_grad_clip', False),
                         error_if_nonfinite=cfg.get('fail_on_nonfinite_grad', False))
                     scaler.step(optimizer)
                     scaler.update()
@@ -462,9 +435,8 @@ def main(local_rank, args):
 
         with torch.no_grad():
             for i_iter_val, data in enumerate(val_dataset_loader):
-                for k in list(data.keys()):
-                    if isinstance(data[k], torch.Tensor):
-                        data[k] = data[k].cuda()
+                data = move_batch_to_device(data, torch.cuda.current_device(),
+                                            cfg.get('non_blocking_transfer', False))
                 input_imgs = data.pop('img')
                 
                 with torch.cuda.amp.autocast(amp):
@@ -564,6 +536,7 @@ if __name__ == '__main__':
     parser.add_argument('--resume-from', type=str, default='')
     parser.add_argument('--iter-resume', action='store_true', default=False)
     parser.add_argument('--seed', type=int, default=None)
+    add_occ3d_eval_mask_argument(parser)
     parser.add_argument('--gradient-accumulation', type=int, default=1)
     parser.add_argument('--dataset', type=str, default='nuscenes')
     args = parser.parse_args()

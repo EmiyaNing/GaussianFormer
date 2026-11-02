@@ -95,3 +95,14 @@ def test_run_eval_all_rejects_explicit_resume(tmp_path):
     (tmp_path / 'epoch_1.pth').touch()
     with pytest.raises(ValueError, match='cannot be used together'):
         eval_script.run_eval_all(_args(tmp_path, resume_from='other.pth'))
+
+
+@pytest.mark.parametrize('mask', ['none', 'camera'])
+def test_eval_all_forwards_explicit_mask_to_every_checkpoint(tmp_path, monkeypatch, mask):
+    (tmp_path / 'epoch_1.pth').touch()
+    (tmp_path / 'epoch_2.pth').touch()
+    commands = []
+    monkeypatch.setattr(eval_script.subprocess, 'run', lambda command, **kwargs: commands.append(command))
+    eval_script.run_eval_all(_args(tmp_path, occ3d_eval_mask=mask))
+    assert len(commands) == 2
+    assert all(command[command.index('--occ3d-eval-mask') + 1] == mask for command in commands)

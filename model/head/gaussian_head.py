@@ -254,6 +254,9 @@ class GaussianHead(BaseTaskHead):
                 delta = representation[idx]['delta_gaussian']
                 semantics = rendered[parent] + self._render(
                     delta, sampled_xyz, context, include_empty=False)
+                replaced = representation[idx].get('replaced_gaussian')
+                if replaced is not None:
+                    semantics = semantics - self._render(replaced, sampled_xyz, context, include_empty=False)
             else:
                 semantics = self._render(gaussians, sampled_xyz, context)
             if self.incremental_densify:
@@ -281,11 +284,21 @@ class GaussianHead(BaseTaskHead):
         else:
             final_prediction = prediction[-1].argmax(dim=1)
 
-        allocation_aux = [
-            item['allocation_aux']
-            for item in representation
-            if 'allocation_aux' in item
-        ]
+        allocation_aux = []
+        for item in representation:
+            if 'allocation_aux' not in item:
+                continue
+            aux = item['allocation_aux']
+            if self.training and torch.is_grad_enabled() and aux.get('needs_base_logits', False):
+                if not self.use_localagg_react:
+                    raise ValueError('V7 local gain targets require additive React rendering')
+                parent = item['densify_parent_index']
+                base = rendered.get(parent)
+                if base is None:
+                    with torch.no_grad():
+                        base = self._render(representation[parent]['gaussian'], sampled_xyz, context)
+                aux = dict(aux, base_logits=base.detach(), output_logits=prediction[-1])
+            allocation_aux.append(aux)
         
         return {
             'pred_occ': prediction,

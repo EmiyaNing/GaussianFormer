@@ -1,7 +1,7 @@
 _base_ = ['../_base_/misc.py']
 
 dataset_name_flag = 'occ3d'
-occ3d_eval_mask = 'camera'
+occ3d_eval_mask = 'none'
 data_root = 'data/nuscenes/'
 anno_root = 'data/nuscenes_cam/'
 occ3d_path = 'data/occ3d/gts'

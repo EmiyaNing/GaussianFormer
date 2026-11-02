@@ -12,6 +12,23 @@ from model.encoder.gaussian_encoder.ops.masked_softmax import normalize_weights
 from model.encoder.gaussian_encoder.deformable_module import DeformableFeatureAggregation as DFA
 
 
+def test_lidar10f_remote_checkpoint_uses_trained_image_crop():
+    from mmengine import Config
+    from dataset.dataset import NuScenesDataset
+    cfg = Config.fromfile('config/img_point_lite_react/img_voxel_react_occ3d_fast_v5_mem_lidar10f.py')
+    dataset = NuScenesDataset.__new__(NuScenesDataset)
+    dataset.test_mode = True
+    dataset.data_aug_conf = cfg.val_dataset_config.data_aug_conf
+    resize, dimensions, crop, flip, rotation = dataset._sample_augmentation()
+    assert resize == 0.44
+    assert dimensions == (704, 396)
+    assert crop == (0, 140, 704, 396)
+    assert not flip and rotation == 0
+    assert cfg.train_dataset_config.num_lidar_history == 9
+    assert cfg.val_dataset_config.num_lidar_history == 9
+    assert cfg.occ3d_eval_mask == 'none'
+
+
 def test_static_grid_exact_batch_cache_and_spec_change():
     spec = dict(origin=[-40.,-40.,-1.],shape=[17,13,7],resolution=.4)
     batch = custom_collate_fn_temporal([dict(static_occ_grid=spec)]*2)

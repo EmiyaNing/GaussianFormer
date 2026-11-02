@@ -272,7 +272,15 @@ class AdaptiveAllocationV6Loss(nn.Module):
             centered,
         ) / support_count[..., None, None].clamp_min(1.0)
         identity = torch.eye(3, device=means.device)[None, None]
-        eigenvalue, eigenvector = torch.linalg.eigh(covariance + identity * 1e-5)
+        # Bound large cuSOLVER 3x3 batches without changing the target formula.
+        matrix = covariance + identity * 1e-5
+        flat = matrix.reshape(-1, 3, 3)
+        if flat.shape[0] > 32768:
+            decompositions = [torch.linalg.eigh(chunk) for chunk in flat.split(32768)]
+            eigenvalue = torch.cat([part[0] for part in decompositions]).reshape(*matrix.shape[:-1])
+            eigenvector = torch.cat([part[1] for part in decompositions]).reshape_as(matrix)
+        else:
+            eigenvalue, eigenvector = torch.linalg.eigh(matrix)
         local_axis = eigenvector[..., -1]
         gaussian_axis = _max_scale_axis(rotations, scales)
         axis_mismatch = 1.0 - (

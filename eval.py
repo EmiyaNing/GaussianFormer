@@ -118,6 +118,10 @@ from mmengine import Config
 from mmengine.runner import set_random_seed
 from mmengine.logging import MMLogger
 from mmseg.models import build_segmentor
+from misc.occ3d_eval import (
+    add_occ3d_eval_batch, add_occ3d_eval_mask_argument, configure_occ3d_eval_mask,
+    get_occ3d_eval_mask_name, select_occ3d_eval_mask,
+)
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -193,6 +197,8 @@ def run_eval_all(args):
         common += ['--seed', str(args.seed)]
     if args.vis_occ:
         common.append('--vis-occ')
+    if getattr(args, 'occ3d_eval_mask', None) is not None:
+        common += ['--occ3d-eval-mask', args.occ3d_eval_mask]
 
     print(f'[eval_all] Found {len(checkpoints)} checkpoints in '
           f'{Path(args.work_dir).expanduser().resolve()}', flush=True)
@@ -213,13 +219,6 @@ def run_eval_all(args):
 
 def pass_print(*args, **kwargs):
     pass
-
-
-def get_occ3d_eval_mask_name(cfg):
-    mask_name = cfg.get('occ3d_eval_mask', None)
-    if mask_name is not None:
-        return mask_name
-    return 'camera' if cfg.get('eval_mask_flag', True) else 'none'
 
 
 def occ3d_mask_to_numpy(result_dict, key, idx, grid_shape):
@@ -252,6 +251,8 @@ def main(local_rank, args):
     # load config
     cfg = Config.fromfile(args.py_config)
     cfg.work_dir = args.work_dir
+    if cfg.get('dataset_name_flag') == 'occ3d':
+        configure_occ3d_eval_mask(cfg, getattr(args, 'occ3d_eval_mask', None))
     # global settings (strict SparseWorld records seed 17 in checkpoint meta)
     seed = cfg.get('seed', 42) if args.seed is None else args.seed
     set_random_seed(seed)
@@ -304,6 +305,7 @@ def main(local_rank, args):
     # build model
     import model
     from dataset import get_dataloader
+    from dataset.utils import move_batch_to_device
 
     my_model = build_segmentor(cfg.model)
     my_model.init_weights()
@@ -311,7 +313,8 @@ def main(local_rank, args):
     logger.info(f'Number of params: {n_parameters}')
     if distributed:
         if cfg.get('syncBN', True):
-            my_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(my_model)
+            from model.segmentor.image_execution import convert_sync_batchnorm_preserving_fixed
+            my_model = convert_sync_batchnorm_preserving_fixed(my_model)
             logger.info('converted sync bn.')
 
         find_unused_parameters = cfg.get('find_unused_parameters', False)
@@ -393,11 +396,10 @@ def main(local_rank, args):
         miou_metric.reset()
     elif cfg.dataset_name_flag == 'occ3d':
         from misc.occ3d_nus_metrics import Metric_mIoU
-        occ3d_eval_mask = get_occ3d_eval_mask_name(cfg)
-        miou_metric = Metric_mIoU(
-            num_classes=18,
-            use_lidar_mask=occ3d_eval_mask == 'lidar',
-            use_image_mask=occ3d_eval_mask == 'camera')
+        logger.info(f'Occ3D evaluation mask: {get_occ3d_eval_mask_name(cfg)}')
+        # Apply the shared selector to local metadata before accumulation, as
+        # train.py does. Mask availability alone never enables filtering.
+        miou_metric = Metric_mIoU(num_classes=18)
     else:
         print("Not emplement this dataset:", cfg.dataset_name_flag)
         exit(0)
@@ -408,9 +410,8 @@ def main(local_rank, args):
     with torch.no_grad():
         for i_iter_val, data in enumerate(val_dataset_loader):
             
-            for k in list(data.keys()):
-                if isinstance(data[k], torch.Tensor):
-                    data[k] = data[k].cuda()
+            data = move_batch_to_device(data, torch.cuda.current_device(),
+                                        cfg.get('non_blocking_transfer', False))
             input_imgs = data.pop('img')
             result_dict = my_model(imgs=input_imgs, metas=data)
             if strict_metric is not None:
@@ -423,15 +424,7 @@ def main(local_rank, args):
                         occ_mask = result_dict['occ_cam_mask'][idx].flatten()
                         miou_metric._after_step(pred_occ, gt_occ, occ_mask)
                     elif cfg.dataset_name_flag == 'occ3d':
-                        grid_shape = get_occ_grid_shape(cfg, result_dict)
-                        pred_occ = pred_occ.reshape(*grid_shape).cpu().numpy()
-                        gt_occ   = gt_occ.reshape(*grid_shape).cpu().numpy()
-                        occ_cam_mask = occ3d_mask_to_numpy(
-                            result_dict, 'occ_cam_mask', idx, grid_shape)
-                        occ_lidar_mask = occ3d_mask_to_numpy(
-                            result_dict, 'occ_lidar_mask', idx, grid_shape)
-                        miou_metric.add_batch(
-                            pred_occ, gt_occ, occ_lidar_mask, occ_cam_mask)
+                        add_occ3d_eval_batch(miou_metric, pred_occ, gt_occ, data, idx, cfg)
                     # breakpoint()
             if i_iter_val % print_freq == 0 and local_rank == 0:
                 logger.info('[EVAL] Iter %5d'%(i_iter_val))
@@ -467,6 +460,7 @@ if __name__ == '__main__':
     parser.add_argument('--sparseworld-python', type=str, default='',
                         help='legacy SparseWorld Python; used only by the official compatibility config')
     parser.add_argument('--seed', type=int, default=None)
+    add_occ3d_eval_mask_argument(parser)
     parser.add_argument('--vis-occ', action='store_true', default=False)
     parser.add_argument('--eval-tag', type=str, default='', help=argparse.SUPPRESS)
     parser.add_argument('--eval-log-file', type=str, default='', help=argparse.SUPPRESS)

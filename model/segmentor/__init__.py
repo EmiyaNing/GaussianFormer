@@ -1,5 +1,6 @@
 from .base_segmentor import CustomBaseSegmentor
 from .bev_segmentor import BEVSegmentor
+from .react_temporal_segmentor import ReactTemporalSegmentor
 from .opus_segmentor import OPUSSegmentor
 from .opus_temporal_segmentor import OPUSTemporalSegmentor
 from .frozen_opus_adapter import FrozenOPUSAdapterSegmentor

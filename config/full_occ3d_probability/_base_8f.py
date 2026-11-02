@@ -33,7 +33,7 @@ optimizer = dict(paramwise_cfg=dict(custom_keys=dict(
     img_backbone=dict(lr_mult=0.1),
     sampling_offset=dict(lr_mult=0.1))))
 
-# Occupancy supervision/evaluation use the camera mask; Set targets remain
-# all nonempty GT, with the inherited camera-dependent distance weighting.
+# Occupancy supervision uses the camera mask; evaluation defaults to full
+# volume. Set targets retain the inherited camera-dependent distance weighting.
 loss_input_convertion = dict(occ_mask='occ_cam_mask')
-occ3d_eval_mask = 'camera'
+occ3d_eval_mask = 'none'

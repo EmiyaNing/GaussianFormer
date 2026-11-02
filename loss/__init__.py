@@ -12,6 +12,8 @@ from .gaussian_point_occupancy_loss import GaussianPointOccupancyLoss
 from .gaussian_occupancy_loss import GaussianOccupancyLoss
 from .gaussian_center_chamfer_loss import GaussianCenterChamferLoss
 from .adaptive_allocation_v6_loss import AdaptiveAllocationV6Loss
+from .adaptive_allocation_v7_loss import AdaptiveAllocationV7Loss
+from .adaptive_allocation_v8_loss import AdaptiveAllocationV8Loss
 from .sparseworld_strict_loss import SparseWorldStrictLoss
 from .sparseworld_gaussian_point_occupancy_loss import SparseWorldGaussianPointOccupancyLoss
 from .active_set_loss import ActiveSetOccupancyLoss

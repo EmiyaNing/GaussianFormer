@@ -1,4 +1,5 @@
 from .deformable_module import SparseGaussian3DKeyPointsGenerator, DeformableFeatureAggregation
+from .temporal_deformable import TemporalDeformableFeatureAggregation
 from .refine_module import SparseGaussian3DRefinementModule
 from .spconv3d_module import SparseConv3D
 from .anchor_encoder_module import SparseGaussian3DEncoder
@@ -7,3 +8,5 @@ from .gaussian_encoder import GaussianOccEncoder
 from .topk_densify_module import TopkDensifyModule
 from .topk_module.topk_densify_v2 import DensifyOnly
 from .topk_module.adaptive_allocationv6 import AdaptiveAllocationV6
+from .topk_module.adaptive_allocationv7 import AdaptiveAllocationV7
+from .topk_module.adaptive_allocationv8 import AdaptiveAllocationV8

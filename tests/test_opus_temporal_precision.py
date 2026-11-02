@@ -33,6 +33,7 @@ def _make_segmentor(device, image_dtype='bfloat16', checkpoint=True,
     model.image_checkpoint = checkpoint
     model.freeze_img_backbone = freeze_backbone
     model.freeze_img_neck = freeze_neck
+    model.frozen_modules_eval = False
     model.img_backbone.requires_grad_(not freeze_backbone)
     model.img_neck.requires_grad_(not freeze_neck)
     return model.to(device)
