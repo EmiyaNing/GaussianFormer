@@ -169,6 +169,13 @@ def main(local_rank, args):
     optimizer = build_optim_wrapper(my_model, cfg.optimizer)
     loss_func = OPENOCC_LOSS.build(cfg.loss).cuda()
     max_num_epochs = cfg.max_epochs
+    if len(train_dataset_loader) == 0:
+        raise RuntimeError(
+            'The training loader is empty on this rank: the sampler uses '
+            'drop_last=True and the dataset has fewer samples than the number '
+            f'of GPU ranks ({world_size}). Add samples or use fewer GPUs '
+            '(the world-model smoke config has only two and is meant for '
+            'single-GPU link checks).')
     if cfg.get('multisteplr', False):
         scheduler = MultiStepLRScheduler(
             optimizer,

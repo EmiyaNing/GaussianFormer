@@ -260,7 +260,9 @@ def load_model(cfg, checkpoint, device):
     state = torch.load(checkpoint, map_location='cpu', weights_only=False)
     state = state.get('state_dict', state)
     if state and all(key.startswith('module.') for key in state):
-        state = {key.removeprefix('module.'): value for key, value in state.items()}
+        # str.removeprefix is Python 3.9+; the training image is 3.8.
+        state = {(key[len('module.'):] if key.startswith('module.') else key): value
+                 for key, value in state.items()}
     # A mismatched/backbone-only checkpoint must not silently visualize random heads.
     network.load_state_dict(state, strict=True)
     return network.to(device).eval().requires_grad_(False)

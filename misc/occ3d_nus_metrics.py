@@ -73,6 +73,9 @@ class Metric_mIoU():
         self.occ_zdim = int((self.point_cloud_range[5] - self.point_cloud_range[2]) / self.occupancy_size[2])
         self.voxel_num = self.occ_xdim * self.occ_ydim * self.occ_zdim
         self.hist = np.zeros((self.num_classes, self.num_classes))
+        # Occupied/free confusion so the eval can report the same occupancy IoU
+        # as the world-model metric (SparseWorldStrictMetric's ``n*s/IoU``).
+        self.binary = np.zeros((2, 2), dtype=np.float64)
         self.cnt = 0
 
     def hist_info(self, n_cl, pred, gt):
@@ -149,6 +152,11 @@ class Metric_mIoU():
             masked_semantics_pred = semantics_pred
 
             # # pred = np.random.randint(low=0, high=17, size=masked_semantics.shape)
+        # ``hist[target, prediction]`` for occupied/free, same as the world metric.
+        pred_occ = (np.asarray(masked_semantics_pred) != 17).ravel().astype(np.int64)
+        gt_occ = (np.asarray(masked_semantics_gt) != 17).ravel().astype(np.int64)
+        self.binary += np.bincount(2 * gt_occ + pred_occ,
+                                   minlength=4).reshape(2, 2)
         _, _hist = self.compute_mIoU(masked_semantics_pred, masked_semantics_gt, self.num_classes)
         self.hist += _hist    # (N_cls, N_cls)  列对应每个gt类别，行对应每个预测类别, 这样只有对角线位置上的预测是准确的.
 
@@ -181,6 +189,10 @@ class Metric_mIoU():
         # print(f'===> sample-wise averaged mIoU of {cnt} samples: ' + str(round(np.nanmean(mIoU_avg), 2)))
         # eval_res[f'mIoU of {self.cnt} samples'] = round(np.nanmean(mIoU[:self.num_classes-1]) * 100, 2)
         eval_res[f'occ/mIoU'] = round(np.nanmean(mIoU[:self.num_classes - 1]) * 100, 2)
+        occupied_denominator = (self.binary[0, 1] + self.binary[1, 0]
+                                + self.binary[1, 1])
+        eval_res['occ/IoU'] = (round(float(self.binary[1, 1] / occupied_denominator * 100.), 2)
+                               if occupied_denominator else float('nan'))
 
         # eval_res['class_name'] = self.class_names
         # eval_res['mIoU'] = mIoU

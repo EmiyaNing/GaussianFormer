@@ -77,7 +77,15 @@ def _delegate_sparseworld_official_eval() -> None:
     config_path = Path(known.py_config).resolve()
     if not config_path.is_file():
         return
-    config = runpy.run_path(str(config_path))
+    # Configs may use mmengine's ``_base_`` inheritance (``_base_.pc_range``),
+    # which plain ``runpy`` cannot resolve: it leaves ``_base_`` as a list of
+    # paths. Load through mmengine first and fall back to runpy only for files
+    # mmengine refuses to parse.
+    try:
+        from mmengine import Config
+        config = Config.fromfile(str(config_path))
+    except Exception:
+        config = runpy.run_path(str(config_path))
     if not config.get('sparseworld_official_compat', False):
         return
     checkpoint = known.resume_from or config.get('strict_checkpoint') or config.get('official_checkpoint')
@@ -448,6 +456,17 @@ def main(local_rank, args):
         logger.info(f'mIoU: {miou}, iou2: {iou2}')
         miou_metric.reset()
     elif cfg.dataset_name_flag == 'occ3d':
+        if distributed:
+            # Metric_mIoU keeps a per-rank confusion matrix and never reduces
+            # across ranks; without this the logged mIoU only covers the
+            # current rank's validation shard (~1/world_size of the set).
+            # float64 keeps the large voxel counts exact.
+            hist = torch.from_numpy(miou_metric.hist).cuda()
+            dist.all_reduce(hist)
+            miou_metric.hist = hist.cpu().numpy()
+            count = torch.tensor([float(miou_metric.cnt)], device=hist.device)
+            dist.all_reduce(count)
+            miou_metric.cnt = int(count.item())
         eval_results = miou_metric.count_miou_metric()
         logger.info(eval_results)
 

@@ -17,6 +17,10 @@ class SparseWorldStrictLoss(nn.Module):
     seven-timestamp stack on all decoder stages plus initial anchors; from
     epoch 5 the temporal term keeps stage 0 plus initial anchors, all six
     current-only stages become active, and future horizons grow to six.
+
+    ``perception_only=True`` replaces that schedule with the current-frame
+    objective only (initial anchors plus the six decoder stages); the future
+    annotations and the ego trajectory are not read at all.
     """
 
     def __init__(self, pc_range=(-40., -40., -1., 40., 40., 5.4),
@@ -25,7 +29,7 @@ class SparseWorldStrictLoss(nn.Module):
                  class_weights=(3, 2, 3, 2, 2, 3, 3, 2, 3, 2, 2, 1, 2, 1, 1, 1, 1),
                  focal_alpha=.25, focal_gamma=2., focal_weight=2.,
                  smooth_l1_beta=.2, point_weight=.5, empty_dist_thr=.2,
-                 empty_weight=3., chunk_size=1024):
+                 empty_weight=3., chunk_size=1024, perception_only=False):
         super().__init__()
         self.pc_range = tuple(pc_range)
         self.voxel_size = float(voxel_size)
@@ -38,6 +42,10 @@ class SparseWorldStrictLoss(nn.Module):
         self.smooth_l1_beta = smooth_l1_beta
         self.empty_dist_thr, self.empty_weight = empty_dist_thr, empty_weight
         self.chunk_size = int(chunk_size)
+        # Perception-only ablation: supervise the current-frame set and drop
+        # the expanded multi-stamp target, the future horizons and the ego
+        # trajectory. Future annotations are then unused by the objective.
+        self.perception_only = bool(perception_only)
         self.expanded_range = (-80., -60., -3., 80., 60., 6.6)
         self.expanded_shape = (400, 300, 24)
 
@@ -157,9 +165,39 @@ class SparseWorldStrictLoss(nn.Module):
             loss_cls, loss_pts = loss_cls + cls, loss_pts + pts
         return loss_cls / points.shape[0], loss_pts / points.shape[0]
 
+    def _forward_current_only(self, inputs, metas, details):
+        """Current-frame objective used by the perception-only ablation.
+
+        The released objective builds a seven-stamp target grid from the six
+        future annotations.  That target is meaningless once the future queries
+        are removed, so the same set loss is applied to the dense current
+        occupancy for the initial anchors and for every decoder stage.
+        """
+        total = inputs['initial_pred_points'].sum() * 0.
+
+        def current(batch, template):
+            return self._dense_points(
+                metas['occ_label'][batch].to(template.device), template)
+
+        initial = inputs['initial_pred_points']
+        pseudo = initial.new_zeros(*initial.shape[:-1], 17)
+        _, init_pts = self._batch_set_loss(initial, pseudo, current)
+        total = total + init_pts
+        details['init_loss_pts'] = init_pts.detach()
+
+        for stage, (points, logits) in enumerate(zip(
+                inputs['current_pred_points'], inputs['current_pred_logits'])):
+            cls, pts = self._batch_set_loss(points, logits, current)
+            total = total + cls + pts
+            details[f'current.d{stage}.loss_cls'] = cls.detach()
+            details[f'current.d{stage}.loss_pts'] = pts.detach()
+        return total, details
+
     def forward(self, inputs):
         metas = inputs['metas']
         details = {}
+        if self.perception_only:
+            return self._forward_current_only(inputs, metas, details)
         total = inputs['initial_pred_points'].sum() * 0.
         statistics = (inputs['stamp_statistics']
                       if inputs.get('update_stamp_statistics', True) else None)

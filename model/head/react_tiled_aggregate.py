@@ -1,11 +1,19 @@
 """Exact-support React rendering with coarse CSR bins and warp backward."""
 
+import inspect
 import math
 
 import torch
 from torch.autograd.function import once_differentiable
 
 from .react_local_aggregate import PreparedReactAggregator
+
+
+# ``recurse`` joined ``torch.nn.Module._apply`` in PyTorch 2.1; the training
+# image still ships PyTorch 2.0, where forwarding it raises TypeError. Keep
+# the override signature stable but only pass it through when it exists.
+_APPLY_HAS_RECURSE = 'recurse' in inspect.signature(
+    torch.nn.Module._apply).parameters
 
 
 def extension():
@@ -67,7 +75,9 @@ class TiledReactAggregator(PreparedReactAggregator):
 
     def _apply(self, fn, recurse=True):
         self._clear_query_cache()
-        return super()._apply(fn, recurse=recurse)
+        if _APPLY_HAS_RECURSE:
+            return super()._apply(fn, recurse=recurse)
+        return super()._apply(fn)
 
     def _load_from_state_dict(self, *args, **kwargs):
         super()._load_from_state_dict(*args, **kwargs)

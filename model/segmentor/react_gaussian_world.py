@@ -45,7 +45,9 @@ class ReactGaussianWorld(BEVSegmentor):
         """Require every original tensor; never silently freeze missing weights."""
         checkpoint = torch.load(path, map_location='cpu')
         state = checkpoint.get('state_dict', checkpoint)
-        state = {key.removeprefix('module.'): value for key, value in state.items()}
+        # str.removeprefix is Python 3.9+; the training image is 3.8.
+        state = {(key[len('module.'):] if key.startswith('module.') else key): value
+                 for key, value in state.items()}
         expected = {key for key in self.state_dict() if not key.startswith('world_decoder.')}
         missing, unexpected = expected - state.keys(), state.keys() - expected
         if missing or unexpected:
