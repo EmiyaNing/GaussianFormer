@@ -10,11 +10,12 @@ from ....utils.safe_ops import safe_sigmoid
 
 @MODELS.register_module()
 class DensifyOnly(BaseModule):
-    '''
-    Current version densify module only densify the most valueable topk gaussian ball.
-        The topk count can be seted mannual.
-        The shift of gaussian ball's mean, scale, rot, semantic, opacity all learned from instance features.
-    '''
+    """Append learned children to the highest-opacity parents.
+
+    ``topk_count`` is the maximum number of children; each available parent
+    produces at most one. Child geometry, semantics, and opacity are predicted
+    from the selected parent features.
+    """
     def __init__(
         self,
         feat_embed_dim = 128,
@@ -27,6 +28,8 @@ class DensifyOnly(BaseModule):
         **kwargs,
     ):
         super(DensifyOnly, self).__init__()
+        if topk_count < 0:
+            raise ValueError('topk_count must be nonnegative')
         self.topk_count = topk_count
         self.pc_range   = pc_range
         self.scale_range= scale_range
@@ -93,11 +96,10 @@ class DensifyOnly(BaseModule):
             cur_anchor= anchor[b]
 
             if selected_indices is None:
-                try:
-                    _, indices = torch.topk(cur_opa[:, 0], self.topk_count, dim=-1)
-                except RuntimeError:
-                    import pdb
-                    pdb.set_trace()
+                # The configured value is a child budget. Each selected parent
+                # produces one child, including in scenes with fewer parents.
+                count = min(self.topk_count, cur_opa.shape[0])
+                indices = torch.topk(cur_opa[:, 0], count, dim=-1).indices
             else:
                 indices = selected_indices[b]
             filter_feats  = cur_feats[indices]

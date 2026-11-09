@@ -4,6 +4,8 @@ OPENOCC_DATAWRAPPER = Registry('openocc_datawrapper')
 OPENOCC_TRANSFORMS = Registry('openocc_transforms')
 
 from .dataset import NuScenesDataset
+from .lidarseg import NuScenesLidarSegDataset
+from .lidarseg_occ3d_aligned import NuScenesOccAlignedLidarSegDataset
 from .opus_target import PrepareOPUSTarget
 from .dataset_flow import NuScenesFlowDataset, SceneStream
 from .sparseworld_strict import (NuScenesSparseWorldStrictDataset,

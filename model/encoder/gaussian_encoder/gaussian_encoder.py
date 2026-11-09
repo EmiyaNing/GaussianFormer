@@ -102,6 +102,7 @@ class GaussianOccEncoder(BaseEncoder):
         ms_img_feats=None,
         metas=None,
         multi_stride_features=None,
+        return_query_features=False,
         **kwargs
     ):
         feature_maps = ms_img_feats
@@ -162,6 +163,10 @@ class GaussianOccEncoder(BaseEncoder):
                 )
           
                 prediction.append({'gaussian': gaussian})
+                if return_query_features:
+                    # Export the aligned parent features before terminal
+                    # densification, without changing any encoder arithmetic.
+                    prediction[-1]['query_features'] = instance_feature
                 if self.skip_unused_anchor_embed:
                     anchor_embed = None
                 elif i != len(self.operation_order) - 1:

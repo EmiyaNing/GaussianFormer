@@ -1,5 +1,6 @@
 from .base_head import BaseTaskHead
 from .gaussian_head import GaussianHead
+from .gaussian_trainable_bias_head import GaussianTrainableBiasHead
 from .opus_head import OPUSHead
 from .opus_gaussian_residual_head import OPUSGaussianResidualHead
 from .opus_semantic_gaussian_localagg_cuda_head import OPUSSemanticGaussianLocalAggCUDAHead

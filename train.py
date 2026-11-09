@@ -392,7 +392,7 @@ def main(local_rank, args):
             time_s = time.time()
 
             if args.iter_resume:
-                if (i_iter + 1) % 50 == 0 and local_rank == 0:
+                if (i_iter + 1) % cfg.get('iter_checkpoint_interval', 50) == 0 and local_rank == 0:
                     dict_to_save = {
                         'state_dict': raw_model.state_dict(),
                         'optimizer': optimizer.state_dict(),
