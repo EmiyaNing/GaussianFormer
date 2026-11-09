@@ -190,6 +190,8 @@ class DeformableFeatureAggregation(BaseModule):
                 bs, num_anchor, self.num_levels, self.num_pts, self.num_groups)
             camera_logits = F.linear(camera_embed, self.weights_fc.weight).reshape(
                 bs, self.num_cams, self.num_levels, self.num_pts, self.num_groups)
+            if 'camera_logit_bias' in metas:
+                camera_logits = camera_logits + metas['camera_logit_bias'][:, :self.num_cams, None, None, None]
             if self.training and self.attn_drop > 0:
                 # Same shape/order/number of random draws as _get_weights.
                 dropout = torch.rand((bs, num_anchor, self.num_cams, self.num_levels,
@@ -201,6 +203,8 @@ class DeformableFeatureAggregation(BaseModule):
             image_wh = metas.get('image_wh')
             locations, visible = project(key_points, metas['projection_mat'][:, :self.num_cams],
                                          image_wh[:, :self.num_cams] if image_wh is not None else None)
+            if 'camera_valid_mask' in metas:
+                visible = visible & metas['camera_valid_mask'][:, :self.num_cams, None, None]
             locations = locations.permute(0, 2, 3, 1, 4).reshape(
                 bs, num_anchor * self.num_pts, self.num_cams, 2)
             features = NormalizedSampling.apply(*feature_maps_clip, locations,
@@ -253,6 +257,8 @@ class DeformableFeatureAggregation(BaseModule):
                     temp_metas["projection_mat"][:, :self.num_cams],
                     image_wh[:, :self.num_cams] if image_wh is not None else None,
                 )
+                if 'camera_valid_mask' in temp_metas:
+                    mask = mask & temp_metas['camera_valid_mask'][:, :self.num_cams, None, None]
                 points_2d = points_2d.permute(0, 2, 3, 1, 4).reshape(
                     bs, num_anchor * self.num_pts, self.num_cams, 2)
                 mask = mask.permute(0, 2, 3, 1)
@@ -333,6 +339,8 @@ class DeformableFeatureAggregation(BaseModule):
                 self.num_groups,
             )
         )
+        if metas is not None and 'camera_logit_bias' in metas:
+            weights = weights + metas['camera_logit_bias'][:, None, :self.num_cams, None, None, None]
         if self.training and self.attn_drop > 0:
             # mask = torch.rand(
             #     bs, num_anchor, self.num_cams, 1, self.num_pts, 1

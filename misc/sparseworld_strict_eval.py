@@ -86,6 +86,16 @@ class SparseWorldStrictMetric:
             labels.append(label)
         return labels
 
+    def horizon_mask(self, metas, batch, index):
+        """Boolean mask in the target grid for one horizon, or ``None``.
+
+        ``index is None`` selects the current frame; otherwise it is the
+        zero-based future step consumed by :meth:`add_batch`.  Subclasses
+        override this to score only observed voxels (for example the Occ3D
+        camera/lidar mask of each current or future frame).
+        """
+        return None
+
     def add_batch(self, result, metas):
         current = result['final_occ_grid']
         future = list(result['future_occ_grids'])
@@ -99,13 +109,24 @@ class SparseWorldStrictMetric:
                 prediction = prediction_tensor[batch].detach().cpu().numpy()
                 target = (metas['occ_label'][batch] if index is None else
                           metas['future_occ_labels'][batch, index]).detach().cpu().numpy()
+                mask = self.horizon_mask(metas, batch, index)
+                if mask is not None:
+                    if isinstance(mask, torch.Tensor):
+                        mask = mask.detach().cpu().numpy()
+                    mask = np.asarray(mask, dtype=bool).reshape(-1)
+                    if mask.size != prediction.size:
+                        raise ValueError(
+                            'Horizon mask size %d does not match the %s grid '
+                            'size %d' % (mask.size, target.shape, prediction.size))
+                    prediction = prediction.reshape(-1)[mask]
+                    target = target.reshape(-1)[mask]
                 semantic_hist = self._hist(prediction, target, 18)
                 pred_occ = (prediction != 17).astype(np.int64)
                 target_occ = (target != 17).astype(np.int64)
                 binary_hist = self._hist(pred_occ, target_occ, 2)
                 self.semantic[horizon] += semantic_hist
                 self.binary[horizon] += binary_hist
-                if (self.per_sample_path is not None
+                if (self.per_sample_path is not None and mask is None
                         and self.count + batch < self.spatial_samples):
                     flat_target = target.reshape(-1)
                     flat_prediction = prediction.reshape(-1)
@@ -127,7 +148,7 @@ class SparseWorldStrictMetric:
                         'semantic': semantic_hist.astype(np.int64).tolist(),
                         'binary': binary_hist.astype(np.int64).tolist(),
                     })
-                if take_boundary:
+                if take_boundary and mask is None:
                     from misc.diagnostic_metrics import boundary_iou
                     score, _ = boundary_iou(
                         torch.as_tensor(prediction).unsqueeze(0),

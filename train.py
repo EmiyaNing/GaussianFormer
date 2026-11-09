@@ -479,7 +479,9 @@ def main(local_rank, args):
         world_metric = None
         if cfg.get('react_world_eval', False):
             from misc.react_world_metric import ReactWorldMetric
-            world_metric = ReactWorldMetric()
+            world_metric = ReactWorldMetric(
+                mask=get_occ3d_eval_mask_name(cfg),
+                collision=cfg.get('react_world_collision', 'none'))
 
         with torch.no_grad():
             for i_iter_val, data in enumerate(val_dataset_loader):

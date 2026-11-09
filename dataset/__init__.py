@@ -9,10 +9,12 @@ from .dataset_flow import NuScenesFlowDataset, SceneStream
 from .sparseworld_strict import (NuScenesSparseWorldStrictDataset,
                                  LoadSparseWorldFutureOccupancy)
 from .react_world import NuScenesReactWorldDataset
+from .occ3d_ray import LoadOcc3DRayOrigins
 from .transform_3d import *
 from .opus_temporal_history import LoadOPUSV1ImageHistory
+from .react_image_history import LoadReactImageHistory
 from .react_voxel import PrepareReactVoxels
-from .sampler import CustomDistributedSampler
+from .sampler import CustomDistributedSampler, DistributedEvalSampler
 from .utils import custom_collate_fn_temporal
 
 from torch.utils.data.distributed import DistributedSampler
@@ -77,7 +79,9 @@ def get_dataloader(
             val_sampler_args = dict(val_sampler_config)
             if seed is not None:
                 val_sampler_args.setdefault('seed', seed)
-            val_sampler = DistributedSampler(val_wrapper, **val_sampler_args)
+            # No padding/dropping: every validation frame is counted exactly
+            # once across ranks (validation metrics are reduced afterwards).
+            val_sampler = DistributedEvalSampler(val_wrapper, **val_sampler_args)
 
         val_dataset_loader = DataLoader(
             dataset=val_wrapper,
@@ -107,7 +111,9 @@ def get_dataloader(
             train_sampler = CustomDistributedSampler(train_wrapper, **train_sampler_args)
         else:
             train_sampler = DistributedSampler(train_wrapper, **train_sampler_args)
-        val_sampler = DistributedSampler(val_wrapper, **val_sampler_args)
+        # Validation shards must not repeat the head or drop the tail; the
+        # metric aggregators sum per-rank counts after the loop.
+        val_sampler = DistributedEvalSampler(val_wrapper, **val_sampler_args)
 
     train_dataset_loader = DataLoader(
         dataset=train_wrapper,

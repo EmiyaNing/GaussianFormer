@@ -8,6 +8,10 @@
 | [img_voxel_react_occ3d_world_v1_lidar10f.py](img_voxel_react_occ3d_world_v1_lidar10f.py) | 指定云端感知检查点与本地训练设置 |
 | [img_voxel_react_occ3d_world_v1_smoke.py](img_voxel_react_occ3d_world_v1_smoke.py) | 两个训练样本、一个验证样本的链路检查 |
 | [react_occ3d_world_perception_finetune.py](react_occ3d_world_perception_finetune.py) | 五轮联合训练，感知器学习率为预测器的 0.1 倍 |
+| [img_voxel_react_occ3d_world_v1_img4f.py](img_voxel_react_occ3d_world_v1_img4f.py) | 冻结四图像时刻（img4f）感知器的基础配置 |
+| [img_voxel_react_occ3d_world_v1_lidar10f_img4f.py](img_voxel_react_occ3d_world_v1_lidar10f_img4f.py) | 固定本地 img4f epoch 17 权重与训练设置 |
+| [react_occ3d_world_perception_finetune_img4f.py](react_occ3d_world_perception_finetune_img4f.py) | img4f 五轮联合微调，感知器学习率为预测器的 0.1 倍 |
+| [img_voxel_react_occ3d_world_v1_lidar10f_img4f_smoke.py](img_voxel_react_occ3d_world_v1_lidar10f_img4f_smoke.py) | img4f 两个训练样本、一个验证样本的链路检查 |
 
 感知器配置位于 [../img_point_lite_react/](../img_point_lite_react/)。世界模型基础配置
 通过相对路径继承九帧历史感知器；两个目录分别管理感知计算与世界模型训练设置。
@@ -77,6 +81,9 @@ smoke 的训练索引为 `[136,264]`，验证索引为 `[136]`，用于覆盖历
 |---|---|
 | `model/encoder/react_world_decoder.py` | ego/场景交互、reg/cls/vel、轨迹、自回归 |
 | `model/segmentor/react_gaussian_world.py` | 保留感知路径、严格加载与冻结、组织输出 |
+| `model/segmentor/react_temporal_gaussian_world.py` | img4f 感知器（4 图像时刻）+ world decoder，两父类 MRO 组合 |
+| `model/segmentor/react_temporal_segmentor.py` | 逐帧图像特征、历史 stop-grad、推理特征 cache |
+| `dataset/react_image_history.py` | 4 时刻图像窗口、补帧掩码与 cache 身份 |
 | `model/head/react_world_render.py` | 复用 React 算子，转换输出坐标 |
 | `dataset/react_world.py` | 当前传感器输入，加未来监督标签 |
 | `loss/react_world_loss.py` | 六时刻占据、轨迹、reg 正则 |
@@ -300,3 +307,198 @@ GPU 小样本训练只验证程序、梯度、验证与保存链路，不代表�
 `[1,6,2]`。小样本训练峰值 allocated 为 3148.3 MiB；这个数字不代表正式训练吞吐
 或其他输入规模。验证日志和审计结果位于 `/tmp/react_world_v1_smoke.console.log`、
 `/tmp/react_world_v1_eval.console.log`、`/tmp/react_world_v1_audit.json`。
+
+## Camera mask 下的未来预测评测
+
+[img_voxel_react_occ3d_world_v1_eval_camera_mask.py](img_voxel_react_occ3d_world_v1_eval_camera_mask.py)
+继承九帧历史正式配置，只把 `occ3d_eval_mask` 从 `none` 改为 `camera`。当前帧使用
+当前 `labels.npz` 的 `mask_camera`；1/2/3 秒分别使用第 2/4/6 个未来目标帧自己的
+`future_occ_cam_masks`。这些 mask 与 `future_occ_grids` 在同一个 native future-ego
+网格上，因此不需要额外坐标变换。规划 L2 与 mask 无关，保持原口径。
+
+`ReactWorldMetric` 的 `mask` 参数由 `occ3d_eval_mask` 传入；`mask` 只在统计前过滤
+未观测体素，`mask='none'` 时行为与旧评测完全一致。新增回归测试
+`tests/test_react_world_metric_mask.py`。
+
+同一配置默认设置 `react_world_collision='agent'`，输出 ST-P3/UniAD 风格的开环
+collision rate。口径如下：
+
+- 障碍只取 Occ3D 的车辆/行人类别 `{2 bicycle, 3 bus, 4 car, 5 construction_vehicle,
+  6 motorcycle, 7 pedestrian, 9 trailer, 10 truck}`，与 ST-P3 的 vehicle+human 对应；
+  `driveable_surface`、`sidewalk`、`terrain`、`manmade`、`vegetation`、`free`、
+  `barrier`、`traffic_cone` 都不算碰撞。
+- 用**未加 camera mask 的 GT 未来占据**构造 BEV 障碍图（camera mask 只用于占据
+  mIoU，不能用于 collision，否则会漏掉未来不可见的 agent）。
+- 自车矩形沿用 ST-P3 常数：宽 1.85m、长 4.084m、沿 x 前移 0.5m；规划点先用
+  `future_ego_to_current` 的逆变换到对应未来 ego 帧，矩形在该帧中轴对齐。
+- 1s/2s/3s 对应六个 0.5s 未来步中的第 2/4/6 步；当前时刻不算。
+- 输出 `collision/1s|2s|3s`（分母为全部验证样本，%）与 `collision/avg`；
+  `collision_valid/*` 是只在 GT 自身不碰撞的样本上计算的比例；
+  `collision_gt/*` 是 GT 轨迹自身的碰撞率（sanity check），
+  `collision_valid_count/*` 给出有效分母。该指标不使用 camera mask，因此同一次
+  评测里的 `collision/*` 与 `1s/2s/3s` mIoU 是两套独立口径。
+- 绝对数值不要直接和 SparseWorld 论文的 0.05% 对比：后者是 SparseDrive 在
+  nuScenes 上用 GT 实例框得到的，我们用的是 Occ3D voxel agent 和不同的 planning
+  head；应比较协议与趋势。新增回归测试 `tests/test_react_world_collision.py`。
+- 实现自检：在 100 个真实验证样本上，用 GT 轨迹跑同一 collision 口径，1/2/3s
+  均为 `0/100 = 0.000%`，确认坐标变换、agent 类别过滤和矩形栅格没有把正常行驶
+  误判为碰撞；2 rank Gloo 下 `ReactWorldMetric.synchronize` 的 25 个统计量合并
+  也已验证（50% collision、plan endpoint 2.5m 的构造场景）。这些是协议自检，
+  不是模型性能。
+
+本地已完成的 24 轮冻结实验 `out/img_voxel_world_v1/` 中，按无 mask 验证指标，
+epoch 19 的未来 1/2/3 秒 mIoU 最高（28.12/25.20/22.77，均值 25.36）；epoch 23
+的未来 IoU 最高（46.26/43.00/39.83）。相机 mask 下的最优轮次可能不同，建议先跑
+epoch 19，再按需对比 epoch 23：
+
+```bash
+# 4 卡（4220 个验证样本可被 4 整除；8 卡会被 DistributedSampler 补齐 4 个重复样本）
+# 用 selfocc 环境自带的 python（本机为 python3.8）
+CUDA_VISIBLE_DEVICES=0,1,2,3 python eval.py \
+  --py-config config/sagformer_world_model/img_voxel_react_occ3d_world_v1_eval_camera_mask.py \
+  --resume-from out/img_voxel_world_v1/epoch_19.pth \
+  --work-dir out/img_voxel_world_v1_eval_camera_mask
+```
+
+输出中的 `0s/mIoU` 应与独立感知器的 camera mask 结果（46.82 左右，因验证子集不同
+会有小幅差异）接近；`1s/2s/3s` 即未来预测的 camera-mask mIoU，`1s/2s/3s/IoU`
+为二分类占据 IoU，`plan/*` 为规划误差。每个 horizon 还报告
+`mIoU_finite_classes`、occupied precision/recall 与 pooled 平均，便于和旧记录区分
+分母。
+
+## 四图像时刻感知器（img4f）的 world model
+
+`img_voxel_react_occ3d_fast_v5_lidar10f_img4f` 把 v5 感知器的图像分支扩展为
+**当前帧 + 3 帧历史相机**（每时刻 6 相机，共 24 路），由
+`TemporalDeformableFeatureAggregation` 融合：每个历史时刻带一个初始为 -2 的可学习
+logit bias，当前时刻 bias 固定为 0；历史帧按 `image_frame_valid` 从联合可见性
+softmax 中屏蔽。LiDAR 仍是当前帧 + 9 帧历史，输入 704×256，Occ3D 默认无 camera
+mask。
+
+感知器代码原在 `react_occ3d_img_history` 分支，world model 在
+`sagformer_world_model` 分支，两者都从 `bbf161f` 分出且都改过
+`gaussian_encoder.py`、`react_tiled_aggregate.py`、`train.py`。这里按功能挑选
+感知侧改动移植，不整分支合并，v1 冻结配置的行为保持不变。
+
+### 权重
+
+`ckpts/img_voxel_react_occ3d_fast_v5_lidar10f_img4f.pth` 复制自
+`out/img_voxel_react_img_history_aggregation/epoch_17.pth`
+（360,246,107 字节，sha256
+`f2cf67421965a5276e47c56a48b318cc6094ac0542ceae410ef86135cbe511d7`）。
+该实验 4 卡训练 17 轮，6019 帧验证集、无 camera mask 的 mIoU 为 **34.49**、
+二分类占据 IoU 为 **51.58**；同为无 mask 口径的单帧 10 帧 LiDAR 感知器是
+33.31 / 50.79。
+
+world 配置严格加载全部 **639** 个感知张量（637 个 v5 权重 + 2 个时间 bias），
+新增 **54** 个 `world_decoder.*` 参数。完整 world 检查点仍包含感知权重，
+恢复/评测不依赖原感知检查点文件（与 v1 相同）。
+
+### 代码合并与新增类
+
+移植自 `react_occ3d_img_history`：
+
+| 文件 | 作用 |
+|---|---|
+| `dataset/react_image_history.py` | `LoadReactImageHistory`：4 时刻图像窗口、补帧掩码、特征 cache 身份 |
+| `model/segmentor/react_temporal_segmentor.py` | `ReactTemporalSegmentor`：逐帧 backbone/FPN、历史 stop-grad、推理 cache |
+| `model/encoder/gaussian_encoder/temporal_deformable.py` | `TemporalDeformableFeatureAggregation` |
+| `model/utils/torch_compat.py` | 旧版 PyTorch 的 `_apply(recurse=)` 兼容 |
+| `deformable_module.py` | `camera_valid_mask` / `camera_logit_bias` 两个可选元数据 |
+| `gaussian_encoder.py` | `fuse_temporal_sampling` 分支（仅 `_cuda` 变体使用） |
+| `dataset/sampler.py` | `DistributedEvalSampler`：验证集不再补齐或丢弃样本 |
+
+新增 `model/segmentor/react_temporal_gaussian_world.py`：
+`ReactTemporalGaussianWorld(ReactGaussianWorld, ReactTemporalSegmentor)`。
+MRO 让 world 的严格加载、冻结策略、未来读出与 temporal 的逐帧图像提取、历史
+stop-grad、推理 cache 组合在一起，`BEVSegmentor.forward`、lifter、encoder、head
+仍只执行一次。冻结版与联合微调版共用同一个类，只由 `freeze_perception` 区分。
+
+**行为变化**：`dataset/__init__.py` 的验证采样器从 `DistributedSampler` 换成
+`DistributedEvalSampler`。此前 `drop_last=False` 会重复验证集头部，使指标分母
+偏大（4 卡 4219 帧会变成 4220 帧、8 卡补 4 个重复样本）。所有 world 配置的
+验证集现在每帧恰好计数一次，rank 间最多相差一帧；`tests/test_distributed_eval_sampler.py`
+覆盖 0/1/7/150/6019 帧与 1/2/3/4/8 卡。
+
+### 训练与评测
+
+```bash
+# 联合微调（本次交付的默认入口，4 卡）
+CUDA_VISIBLE_DEVICES=0,1,2,3 /opt/conda/envs/selfocc/bin/python train.py \
+  --py-config config/sagformer_world_model/react_occ3d_world_perception_finetune_img4f.py \
+  --work-dir out/react_world_v1_img4f_finetune
+
+# 冻结感知器的对照实验
+CUDA_VISIBLE_DEVICES=0,1,2,3 python train.py \
+  --py-config config/sagformer_world_model/img_voxel_react_occ3d_world_v1_lidar10f_img4f.py \
+  --work-dir out/react_world_v1_img4f
+
+# 单卡链路检查（2 个训练样本 + 1 个验证样本）
+CUDA_VISIBLE_DEVICES=2 python train.py \
+  --py-config config/sagformer_world_model/img_voxel_react_occ3d_world_v1_lidar10f_img4f_smoke.py \
+  --work-dir out/react_world_v1_img4f_smoke
+
+# 评测已训练的 world 检查点
+CUDA_VISIBLE_DEVICES=0 python eval.py \
+  --py-config config/sagformer_world_model/react_occ3d_world_perception_finetune_img4f.py \
+  --resume-from out/react_world_v1_img4f_finetune/epoch_5.pth \
+  --work-dir out/react_world_v1_img4f_eval
+```
+
+联合微调沿用既有 `react_occ3d_world_perception_finetune.py` 的协议：预测器
+重新初始化，感知器学习率 2e-5、预测器 2e-4（固定 10:1），500 步预热 + 余弦
+衰减、`min_lr_ratio=0.1`；损失为当前占据 + 六个未来占据均值 + 规划平方距离 +
+`0.01*reg`；五轮、每轮验证、无 camera mask。不同点是 `img_backbone.frozen_stages=-1`
+且感知器从 img4f 权重加载。`image_frozen_bn=True` 保持图像 BN 的固定统计量与
+仿射参数，因此 462 个参数中只有 356 个可训练。
+
+### 已验证内容（2026-11-03，容器 `yiran`，`selfocc` 环境，单卡 RTX 4090）
+
+- 配置展开：`type=ReactTemporalGaussianWorld`、`num_image_frames=4`、时间 DAF
+  `num_cams=24`；训练/验证 pipeline 第 2 步为 `LoadReactImageHistory`、末尾为
+  `LoadSparseWorldFutureOccupancy`；返回键 30 个，含 `image_frame_valid`、
+  `image_frame_keys`、`future_occ_labels`。
+- 严格加载：639 个感知张量与 `epoch_17` 逐键匹配，`_perception_weights_loaded=True`。
+- 单样本数据：`img=(1,24,3,256,704)`、`projection_mat=(24,4,4)`、
+  `image_frame_valid=[True]*4`、时间偏移 `[0, 0.500, 1.001, 1.501] s`、
+  `future_occ_labels=(6,200,200,16)`、`future_ego_to_current=(6,4,4)`、
+  10 帧 LiDAR 体素 188,857 个。
+- 联合微调冒烟（2 步训练 + 1 帧验证，退出码 0，已保存 `epoch_1.pth`）：
+  `[INPUT_SHAPE] train images=(1, 24, 3, 256, 704)`；两组学习率
+  `1e-07 / 1e-06` → `1.398e-07 / 1.398e-06`，比例 10:1；损失分量含
+  `occ_current`、`occ_step_1..6`、`plan_l2`、`reg_penalty`；grad_norm 106.0 → 16.3；
+  峰值 allocated **10,762.8 MiB**、reserved 14,550.0 MiB；单步迭代 2.24 s（首步
+  15.26 s 含初始化）。两个训练样本的 `plan_l2` 是 146.3 与 2.44，差异来自 GT
+  位移不同（12 m 与 1.5 m 量级），不是收敛证据。
+- 验证输出：`num_samples=1`，`0s/mIoU 29.24`、`1s/2s/3s mIoU
+  24.34/24.78/21.16`、`plan/1s/2s/3s endpoint L2 6.24/12.61/19.18 m`。预测器
+  只训练了两步且为随机初始化，这些数字只证明读出链路正确，**不能当作精度**。
+- 梯度：462 个参数张量中 356 个 `requires_grad`，一次真实前向反传后**这 356 个
+  全部**获得有限梯度（其余 106 个是固定图像 BN 等冻结项），因此 DDP 可以保持
+  `find_unused_parameters=False`。`img_backbone.conv1`
+  4.53、`layer4.2.conv3` 7.91、`img_neck` 0.70、`lifter` 0.42、
+  两个时间 DAF 的 `history_logit_bias` 1.28e-2 / 2.14e-3、encoder
+  `feature_proj` 7.97e-3、`head.empty_scalar` 0.43、`world_decoder.traj_head`
+  1.42。冒烟两步后感知器权重已改变（backbone 最大差 2.42e-7，预热期 lr 量级）。
+- 冻结路径：0 个可训练感知参数、0 个处于 training 的感知模块；输出 6 个
+  `future_occ_grids` `(1,200,200,16)`、`future_occ_frame='future_ego'`、
+  `pred_traj=(1,6,2)`；eval 模式推理 cache 命中 0/未命中 4、占 43.83 MiB。
+- 独立评测入口：`eval.py` 用 smoke 配置 + `--resume-from` 加载
+  `epoch_1.pth`（日志 `successfully resumed`），同一帧复现出 `0s/mIoU 29.19`
+  （训练内验证为 29.24）、未来 1/2/3 秒与规划 L2 完全一致；0.05 的差属于
+  原感知路径已知的稀疏/离散计算非确定性，不是加载或坐标问题。
+- 测试：`tests/test_react_img4f_world.py`（3 项）与
+  `tests/test_distributed_eval_sampler.py`（29 项）共 32 项通过。
+
+### 未验证边界
+
+- 没有启动完整训练（用户选择“配置 + 文档 + 冒烟”）。因此 24 轮冻结版与 5 轮
+  联合微调的 world 指标、以及它们与 v1 的精度对比都还没有数据。
+- 未验证 4 卡联合微调：`syncBN` 沿用 v1 的 `False`，而 img4f 感知器预训练时
+  走 `train.py` 默认的 `syncBN=True`。若要求与预训练完全一致，应设
+  `syncBN=True` 并重新确认多卡行为；本次冒烟是单卡，不覆盖该差异。
+- 未移植 `model/encoder/gaussian_encoder/temporal_ops`（`pack_temporal_features`
+  / `fuse_temporal_sampling` 的打包 CUDA 实现），因此本目录只支持非 `_cuda`
+  的 4 帧配置；`gaussian_encoder.py` 的分支已保留，但启用前需要先补齐该扩展。
+- 仍只支持 batch size 1（React 渲染器约束）。显存数字是 batch 1、单卡的
+  实测值，不代表 4 卡吞吐。

@@ -13,6 +13,8 @@
 | `fast_v5_fused.py` | 完成第 4 步：归一化、采样和累加融合 |
 | `fast_v5_mem.py` | 在融合版本上开启 FFN/DAF checkpoint |
 | `fast_v5_fp32.py` | 保留图像 FP32，使用固定 BN、数据优化和融合 DAF |
+| `fast_v5_mem_9history.py` | 九帧 LiDAR 历史 + 704×256 图像 |
+| `fast_v5_lidar10f_img4f.py` | 在九帧历史/704×256 上加 4 图像时刻（当前 + 3 历史相机） |
 
 继承原有分辨率、点云范围、体素尺寸、Gaussian 数量规则、采样点数、监督层数、
 损失和训练 mask。**默认历史帧数仍是 0**；本次性能测量的 9 帧历史需要显式设置：
@@ -26,6 +28,10 @@ val_dataset_config = dict(num_lidar_history=9)
 都已设置这两项。世界模型配置统一位于
 [`../sagformer_world_model/`](../sagformer_world_model/README.md)，其中
 `img_voxel_react_occ3d_world_v1.py` 也继承此九帧历史版本。
+四图像时刻版本 `img_voxel_react_occ3d_fast_v5_lidar10f_img4f.py` 等价于
+`react_occ3d_img_history` 分支的 `img_voxel_react_occ3d_fast_v5_mem_lidar10f_img4f.py`
+（本分支的 mem 与 10 帧设定已在 `..._v5_mem_9history.py` 中）；对应的 world
+配置与验证记录见该 README 的 img4f 一节。
 这两个九帧历史预设的图像尺寸已对齐云端权重为 **704×256**；原始 v5 配置与下文
 速度测量仍使用其原有的 1600×864，不能将那组测量当作 704×256 的结果。
 
@@ -142,3 +148,61 @@ summary 使用均值，因此上表从 records 重新计算最高峰。
 - **尚未验证完整训练 mIoU。** 梯度一致性只证明 FP32 融合 DAF 的数值一致；图像
   BF16 的精度影响需用相同 seed、历史帧和训练预算做完整对照。需要保留图像 FP32
   时使用 `fast_v5_fp32.py`。
+
+## Occ3D 官方评测：camera mask mIoU + RayIoU
+
+`img_voxel_react_occ3d_fast_v5_lidar10f_img4f_eval_camera_mask.py` 在 img4f 感知器上
+同时开启两项官方口径：
+
+- `occ3d_eval_mask = 'camera'`：`Metric_mIoU(use_image_mask=True)` 先用
+  `labels.npz` 的 `mask_camera` **同时过滤预测和 GT**，再累加 18 类混淆矩阵。
+  这与训练日志里的无 mask 数字（本感知器 34.49 mIoU / 51.58 IoU）不是同一口径。
+- `occ3d_ray_iou = True`：额外输出官方 RayIoU。`misc/occ3d_ray_iou.py` 从场景
+  关键帧的 LiDAR 原点（当前 ego 系，最多 8 个，|x|、|y| < 39 m）投射 nuScenes
+  LiDAR 射线，取每条射线的第一个占据体素，按 1/2/4 m 统计 `RayIoU@1/@2/@4`
+  与 `RayIoU`（17 个占据类的平均，不含 free）。RayIoU 使用**未加** camera mask 的
+  预测与 GT，是射线级指标，不是体素 mIoU，也不是二分类 `iou2`。
+
+`LoadOcc3DRayOrigins`（`dataset/occ3d_ray.py`）只读 `history_context`，追加
+`ray_origins [T, 3]`，不改变图像、点云与标签流水线。`misc/dvr/` 是官方
+`lib/dvr` 渲染器的移植，首次使用时编译并缓存（约 1 分钟），之后直接复用。
+
+```bash
+# 全量 6019 帧
+python eval.py \
+  --py-config config/img_point_lite_react/img_voxel_react_occ3d_fast_v5_lidar10f_img4f_eval_camera_mask.py \
+  --work-dir out/react_img4f_eval_camera_mask
+
+# 101 帧均匀子集（约 1 分钟）
+python eval.py \
+  --py-config config/img_point_lite_react/img_voxel_react_occ3d_fast_v5_lidar10f_img4f_eval_camera_mask_subset.py \
+  --work-dir out/react_img4f_eval_subset101
+
+# 2 帧链路检查
+python eval.py \
+  --py-config config/img_point_lite_react/img_voxel_react_occ3d_fast_v5_lidar10f_img4f_eval_camera_mask_smoke.py \
+  --work-dir out/react_img4f_eval_camera_mask_smoke
+```
+
+配置默认 `load_from = ckpts/img_voxel_react_occ3d_fast_v5_lidar10f_img4f.pth`、
+`strict_load = True`（639 个感知张量）；`--resume-from` 可指向其他检查点并优先。
+
+**与官方实现的一致性（2026-11-04）**：同一份预测、GT 与 origins 上，本地
+`misc/occ3d_ray_iou.py` 与 `.official_opus_ref/loaders/ray_metrics.py` 的结果完全
+相同：RayIoU 0.4709 / @1 0.4337 / @2 0.4795 / @4 0.4994（2 帧）。另外两项自检：
+GT 作为预测时 RayIoU = 1.0；全 free 预测时 RayIoU = 0.0。`tests/test_occ3d_ray_iou.py`
+固化这些行为，`tests/test_occ3d_camera_mask_eval.py` 固化 camera mask 同时过滤
+预测与 GT 的语义。
+
+**101 帧均匀子集实测**（`vis_indices=range(0, 6019, 60)`，单卡 RTX 4090，
+`out/react_img4f_eval_subset101/`）：
+
+| 指标 | 数值 |
+|---|---:|
+| camera mask mIoU | **47.62** |
+| camera mask 二分类 IoU | **68.43** |
+| RayIoU | **0.5039**（50.39%） |
+| RayIoU@1 / @2 / @4 | 0.4693 / 0.5096 / 0.5328（46.93 / 50.96 / 53.28%） |
+
+耗时约 0.64 s/帧（含 RayIoU），全量 6019 帧单卡约 65 分钟。**全量结果尚未跑**，
+上述子集数字只用于验证链路与量级，不应直接当作论文对比值。

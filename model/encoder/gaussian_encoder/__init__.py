@@ -1,4 +1,5 @@
 from .deformable_module import SparseGaussian3DKeyPointsGenerator, DeformableFeatureAggregation
+from .temporal_deformable import TemporalDeformableFeatureAggregation
 from .refine_module import SparseGaussian3DRefinementModule
 from .spconv3d_module import SparseConv3D
 from .anchor_encoder_module import SparseGaussian3DEncoder

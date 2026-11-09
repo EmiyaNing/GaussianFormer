@@ -132,7 +132,12 @@ class GaussianOccEncoder(BaseEncoder):
             elif op == "deformable" or op == "history":
                 extra = {}
                 layer = self.layers[i]
-                if self.cache_image_features and isinstance(layer, DeformableFeatureAggregation):
+                if getattr(layer, 'fuse_temporal_sampling', False):
+                    for name in ('temporal_img_feats', 'temporal_spatial_shapes', 'temporal_level_starts'):
+                        if name not in kwargs:
+                            raise ValueError('Fused temporal sampling requires pack_temporal_features=True')
+                        extra[name] = kwargs[name]
+                elif self.cache_image_features and isinstance(layer, DeformableFeatureAggregation):
                     cameras = layer.num_cams
                     if cameras not in formatted_features:
                         prepared = DAF.feature_maps_format([fm[:, :cameras] for fm in feature_maps])

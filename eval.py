@@ -384,7 +384,11 @@ def main(local_rank, args):
     strict_metric = None
     if cfg.get('react_world_eval', False):
         from misc.react_world_metric import ReactWorldMetric
-        strict_metric = ReactWorldMetric()
+        # ``occ3d_eval_mask`` applies to the current frame and to each future
+        # target frame's own mask; 'none' keeps the original full-volume score.
+        strict_metric = ReactWorldMetric(
+            mask=get_occ3d_eval_mask_name(cfg),
+            collision=cfg.get('react_world_collision', 'none'))
     elif cfg.get('sparseworld_strict_eval', False):
         from misc.sparseworld_strict_eval import SparseWorldStrictMetric
         # Opt-in per-sample dump: without it a report can only quote one
@@ -410,6 +414,13 @@ def main(local_rank, args):
             num_classes=18,
             use_lidar_mask=occ3d_eval_mask == 'lidar',
             use_image_mask=occ3d_eval_mask == 'camera')
+        # Official RayIoU is opt-in: it needs the dvr renderer and one extra
+        # ray-cast per sample for prediction and ground truth.
+        ray_metric = None
+        if cfg.get('occ3d_ray_iou', False):
+            from misc.occ3d_ray_iou import Occ3DRayIoU
+            ray_metric = Occ3DRayIoU()
+            logger.info('RayIoU enabled: dvr renderer will be built on first sample')
     else:
         print("Not emplement this dataset:", cfg.dataset_name_flag)
         exit(0)
@@ -443,6 +454,13 @@ def main(local_rank, args):
                             result_dict, 'occ_lidar_mask', idx, grid_shape)
                         miou_metric.add_batch(
                             pred_occ, gt_occ, occ_lidar_mask, occ_cam_mask)
+                        if ray_metric is not None:
+                            # Official RayIoU is independent of the camera mask:
+                            # it casts the LiDAR pattern from the scene's
+                            # keyframe origins on the unmasked prediction.
+                            ray_metric.add(
+                                pred_occ, gt_occ,
+                                data['ray_origins'][idx].detach().cpu().numpy())
                     # breakpoint()
             if i_iter_val % print_freq == 0 and local_rank == 0:
                 logger.info('[EVAL] Iter %5d'%(i_iter_val))
@@ -468,6 +486,9 @@ def main(local_rank, args):
             dist.all_reduce(count)
             miou_metric.cnt = int(count.item())
         eval_results = miou_metric.count_miou_metric()
+        if ray_metric is not None:
+            ray_metric.synchronize(torch.device('cuda', torch.cuda.current_device()))
+            eval_results.update(ray_metric.results())
         logger.info(eval_results)
 
     

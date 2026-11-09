@@ -214,3 +214,59 @@ class SceneStreamSampler(Sampler):
         # 近似：使用平均场景长度
         avg_scene_len = len(self.dataset) / num_scenes if num_scenes > 0 else 0
         return int(assigned_scenes * avg_scene_len)
+
+
+class DistributedEvalSampler(Sampler[T_co]):
+    r"""Shard a validation set across ranks without padding or dropping.
+
+    ``torch.utils.data.DistributedSampler`` either drops the tail
+    (``drop_last=True``) or repeats the head (``drop_last=False``) so that
+    every rank yields the same number of indices.  Validation metrics are
+    reduced across ranks after the loop, so both behaviors distort the
+    result: repeated frames are counted twice and dropped frames never
+    appear.  This sampler assigns every index to exactly one rank by
+    stride, so per-rank lengths can differ by at most one sample.
+
+    Evaluation loops contain no cross-rank collectives; the reduction happens
+    once after the loop, hence uneven per-rank lengths are safe.
+
+    ``drop_last`` is accepted for compatibility with ``val_sampler_config``
+    but is intentionally ignored.
+    """
+
+    def __init__(self, dataset: Dataset, num_replicas: Optional[int] = None,
+                 rank: Optional[int] = None, shuffle: bool = False,
+                 seed: int = 0, drop_last: bool = False, **kwargs) -> None:
+        if num_replicas is None:
+            if not dist.is_available():
+                raise RuntimeError('Requires distributed package to be available')
+            num_replicas = dist.get_world_size()
+        if rank is None:
+            if not dist.is_available():
+                raise RuntimeError('Requires distributed package to be available')
+            rank = dist.get_rank()
+        if num_replicas < 1 or rank < 0 or rank >= num_replicas:
+            raise ValueError(
+                'Invalid distributed evaluation shard: '
+                f'rank={rank}, num_replicas={num_replicas}')
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.shuffle = shuffle
+        self.seed = seed
+        self.epoch = 0
+
+    def __iter__(self) -> Iterator[T_co]:
+        indices = list(range(len(self.dataset)))
+        if self.shuffle:
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + self.epoch)
+            indices = torch.randperm(len(indices), generator=generator).tolist()
+        # Exact one-copy sharding: no padding, no dropped tail.
+        return iter(indices[self.rank::self.num_replicas])
+
+    def __len__(self) -> int:
+        return len(range(self.rank, len(self.dataset), self.num_replicas))
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
