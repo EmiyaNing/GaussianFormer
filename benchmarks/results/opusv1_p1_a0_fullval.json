@@ -1,0 +1,46 @@
+{
+  "exp_id": "opusv1_p1_a0_fullval_20260921",
+  "source_level": "ours",
+  "command": "python3.10 eval.py --py-config config/opus/ablations_opusv1/p1_a0_base.py --resume-from out/opusv1_1f/epoch_3.pth --work-dir out/opusv1_p1_a0_eval",
+  "config": "config/opus/ablations_opusv1/p1_a0_base.py",
+  "config_sha256": "8bb575975779143c8e5a3c5da435af6beff11d24d3d7323d97d943373d119c65",
+  "checkpoint": "out/opusv1_1f/epoch_3.pth",
+  "checkpoint_sha256": "374a5a0e56ee4d001a86f40bbb616dda126d921fec25fc09dfa5f1978a10c0cf",
+  "log": "out/opusv1_p1_a0_eval/20260921_164351.log",
+  "git_commit": "6482de4",
+  "protocol": {
+    "backbone": "ResNet-50",
+    "input_size": "704x256",
+    "frames": 1,
+    "pretraining": "out/opusv1_1f/epoch_3.pth",
+    "query_count": 600,
+    "adapter": "none",
+    "mask": "camera",
+    "dataset": "Occ3D-nuScenes validation",
+    "samples": 6019,
+    "gpu": "RTX 4090 24 GiB",
+    "batch": 1
+  },
+  "metrics": {
+    "mIoU": 23.64,
+    "per_class_iou": {
+      "others": 6.26,
+      "barrier": 28.76,
+      "bicycle": 15.94,
+      "bus": 32.21,
+      "car": 36.68,
+      "construction_vehicle": 15.1,
+      "motorcycle": 15.28,
+      "pedestrian": 14.35,
+      "traffic_cone": 8.54,
+      "trailer": 23.69,
+      "truck": 26.3,
+      "driveable_surface": 56.8,
+      "other_flat": 31.78,
+      "sidewalk": 23.96,
+      "terrain": 28.07,
+      "manmade": 20.06,
+      "vegetation": 18.1
+    }
+  }
+}

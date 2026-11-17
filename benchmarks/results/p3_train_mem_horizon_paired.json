@@ -1,0 +1,45 @@
+{
+ "config": "config/opus/ablations/p1_a5_gaussian.py",
+ "checkpoint": "out/p1_a5_gaussian/epoch_40.pth",
+ "batch_size": 1,
+ "trainable_params": 180501,
+ "epochs": [
+  0,
+  8
+ ],
+ "interleaved": true,
+ "rows": [
+  {
+   "set_epoch": 0,
+   "max_neighbours": 0,
+   "steps": 40,
+   "p50_ms": 113.874,
+   "p95_ms": 144.42,
+   "peak_alloc_mib": 2210.85
+  },
+  {
+   "set_epoch": 0,
+   "max_neighbours": 32,
+   "steps": 40,
+   "p50_ms": 107.404,
+   "p95_ms": 108.134,
+   "peak_alloc_mib": 2212.14
+  },
+  {
+   "set_epoch": 8,
+   "max_neighbours": 0,
+   "steps": 40,
+   "p50_ms": 244.712,
+   "p95_ms": 611.566,
+   "peak_alloc_mib": 2210.85
+  },
+  {
+   "set_epoch": 8,
+   "max_neighbours": 32,
+   "steps": 40,
+   "p50_ms": 171.553,
+   "p95_ms": 175.289,
+   "peak_alloc_mib": 2212.14
+  }
+ ]
+}

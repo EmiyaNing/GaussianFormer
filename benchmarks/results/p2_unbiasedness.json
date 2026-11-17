@@ -1,0 +1,29 @@
+{
+ "reported_setup": {
+  "base_loss": 4.773081333333334,
+  "truth": 10.739433288574219,
+  "contrast": 6.0,
+  "importance_mean": 10.752846717834473,
+  "importance_bias": 0.013413429260253906,
+  "importance_stderr": 0.03870558366179466,
+  "count_mean": 26.96611785888672,
+  "count_bias": 16.2266845703125,
+  "count_stderr": 0.021179525181651115,
+  "analytical_count_mean": 26.973461151123047
+ },
+ "locations": 2000,
+ "samples": 200,
+ "repetitions": 400,
+ "odds": 40.0,
+ "truth": 0.37330207228660583,
+ "loss_contrast": 7588415.372081108,
+ "importance_mean": 0.3731785714626312,
+ "importance_bias": -0.00012350082397460938,
+ "importance_stderr": 0.00035613408545032144,
+ "count_mean": 1.3885709047317505,
+ "count_bias": 1.0152688324451447,
+ "count_stderr": 0.0013251566560938954,
+ "count_bias_relative": 2.7196978206583955,
+ "reported_importance_bias": 0.0108,
+ "reported_count_bias": 16.904
+}

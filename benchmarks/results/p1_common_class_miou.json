@@ -1,0 +1,431 @@
+{
+ "variants": [
+  "a0_base",
+  "a1_pointwise",
+  "a2_knn_mean",
+  "a3_graph_attention",
+  "a5_cap0",
+  "a5_cap8",
+  "a5_cap32",
+  "a5_cap64",
+  "a5_cap128",
+  "a5_s43",
+  "a2_s43",
+  "a5_s44",
+  "a2_s44",
+  "a4_fixed_gaussian",
+  "a2_knn_max"
+ ],
+ "horizons": {
+  "0": {
+   "common_classes": [
+    "others",
+    "barrier",
+    "bicycle",
+    "bus",
+    "car",
+    "construction_vehicle",
+    "motorcycle",
+    "pedestrian",
+    "traffic_cone",
+    "trailer",
+    "truck",
+    "driveable_surface",
+    "other_flat",
+    "sidewalk",
+    "terrain",
+    "manmade",
+    "vegetation"
+   ]
+  },
+  "2": {
+   "common_classes": [
+    "others",
+    "barrier",
+    "bicycle",
+    "bus",
+    "car",
+    "construction_vehicle",
+    "pedestrian",
+    "traffic_cone",
+    "truck",
+    "driveable_surface",
+    "other_flat",
+    "sidewalk",
+    "terrain",
+    "manmade",
+    "vegetation"
+   ]
+  },
+  "4": {
+   "common_classes": [
+    "others",
+    "barrier",
+    "bicycle",
+    "bus",
+    "car",
+    "construction_vehicle",
+    "pedestrian",
+    "traffic_cone",
+    "truck",
+    "driveable_surface",
+    "other_flat",
+    "sidewalk",
+    "terrain",
+    "manmade",
+    "vegetation"
+   ]
+  },
+  "6": {
+   "common_classes": [
+    "others",
+    "barrier",
+    "bicycle",
+    "bus",
+    "car",
+    "construction_vehicle",
+    "pedestrian",
+    "traffic_cone",
+    "truck",
+    "driveable_surface",
+    "other_flat",
+    "sidewalk",
+    "terrain",
+    "manmade",
+    "vegetation"
+   ]
+  }
+ },
+ "rows": {
+  "a0_base": {
+   "recorded_avg_mIoU": 14.23,
+   "comparable_avg_mIoU": 14.229,
+   "per_horizon_comparable": [
+    14.966,
+    14.754,
+    14.098,
+    13.097
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.97,
+    14.75,
+    14.1,
+    13.1
+   ]
+  },
+  "a1_pointwise": {
+   "recorded_avg_mIoU": 14.35,
+   "comparable_avg_mIoU": 14.347,
+   "per_horizon_comparable": [
+    14.831,
+    14.98,
+    14.293,
+    13.287
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.83,
+    14.98,
+    14.29,
+    13.29
+   ]
+  },
+  "a2_knn_mean": {
+   "recorded_avg_mIoU": 14.37,
+   "comparable_avg_mIoU": 14.375,
+   "per_horizon_comparable": [
+    14.828,
+    14.991,
+    14.318,
+    13.361
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.83,
+    14.99,
+    14.32,
+    13.36
+   ]
+  },
+  "a3_graph_attention": {
+   "recorded_avg_mIoU": 14.37,
+   "comparable_avg_mIoU": 14.367,
+   "per_horizon_comparable": [
+    14.815,
+    14.977,
+    14.317,
+    13.359
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.81,
+    14.98,
+    14.32,
+    13.36
+   ]
+  },
+  "a5_cap0": {
+   "recorded_avg_mIoU": 14.32,
+   "comparable_avg_mIoU": 14.317,
+   "per_horizon_comparable": [
+    14.855,
+    14.961,
+    14.171,
+    13.281
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.85,
+    14.96,
+    14.17,
+    13.28
+   ]
+  },
+  "a5_cap8": {
+   "recorded_avg_mIoU": 14.05,
+   "comparable_avg_mIoU": 14.05,
+   "per_horizon_comparable": [
+    14.724,
+    14.729,
+    13.878,
+    12.871
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.72,
+    14.73,
+    13.88,
+    12.87
+   ]
+  },
+  "a5_cap32": {
+   "recorded_avg_mIoU": 14.26,
+   "comparable_avg_mIoU": 14.264,
+   "per_horizon_comparable": [
+    14.825,
+    14.9,
+    14.115,
+    13.214
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.83,
+    14.9,
+    14.11,
+    13.21
+   ]
+  },
+  "a5_cap64": {
+   "recorded_avg_mIoU": 14.3,
+   "comparable_avg_mIoU": 14.301,
+   "per_horizon_comparable": [
+    14.859,
+    14.925,
+    14.171,
+    13.249
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.86,
+    14.93,
+    14.17,
+    13.25
+   ]
+  },
+  "a5_cap128": {
+   "recorded_avg_mIoU": 14.32,
+   "comparable_avg_mIoU": 14.316,
+   "per_horizon_comparable": [
+    14.856,
+    14.938,
+    14.206,
+    13.265
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.86,
+    14.94,
+    14.21,
+    13.26
+   ]
+  },
+  "a5_s43": {
+   "recorded_avg_mIoU": 14.16,
+   "comparable_avg_mIoU": 14.365,
+   "per_horizon_comparable": [
+    14.859,
+    14.939,
+    14.296,
+    13.367
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 16
+   },
+   "per_horizon_recorded": [
+    14.86,
+    14.94,
+    14.3,
+    12.53
+   ]
+  },
+  "a2_s43": {
+   "recorded_avg_mIoU": 14.13,
+   "comparable_avg_mIoU": 14.354,
+   "per_horizon_comparable": [
+    14.816,
+    14.959,
+    14.273,
+    13.366
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 16,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.82,
+    14.96,
+    13.38,
+    13.37
+   ]
+  },
+  "a5_s44": {
+   "recorded_avg_mIoU": 13.94,
+   "comparable_avg_mIoU": 14.371,
+   "per_horizon_comparable": [
+    14.868,
+    14.987,
+    14.254,
+    13.373
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 16,
+    "6": 16
+   },
+   "per_horizon_recorded": [
+    14.87,
+    14.99,
+    13.36,
+    12.54
+   ]
+  },
+  "a2_s44": {
+   "recorded_avg_mIoU": 14.37,
+   "comparable_avg_mIoU": 14.367,
+   "per_horizon_comparable": [
+    14.842,
+    14.983,
+    14.306,
+    13.339
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.84,
+    14.98,
+    14.31,
+    13.34
+   ]
+  },
+  "a4_fixed_gaussian": {
+   "recorded_avg_mIoU": 14.36,
+   "comparable_avg_mIoU": 14.361,
+   "per_horizon_comparable": [
+    14.801,
+    14.988,
+    14.287,
+    13.368
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.8,
+    14.99,
+    14.29,
+    13.37
+   ]
+  },
+  "a2_knn_max": {
+   "recorded_avg_mIoU": 14.4,
+   "comparable_avg_mIoU": 14.401,
+   "per_horizon_comparable": [
+    14.872,
+    15.02,
+    14.349,
+    13.364
+   ],
+   "finite_classes": {
+    "0": 17,
+    "2": 15,
+    "4": 15,
+    "6": 15
+   },
+   "per_horizon_recorded": [
+    14.87,
+    15.02,
+    14.35,
+    13.36
+   ]
+  }
+ }
+}

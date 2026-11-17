@@ -1,0 +1,74 @@
+{
+ "rows": [
+  {
+   "checkpoint": "out/p1_a5_gaussian/epoch_40.pth",
+   "base_scales_per_axis": [
+    0.3564,
+    0.3547,
+    0.3616
+   ],
+   "base_scale_isotropy_ratio": 1.0193,
+   "base_scale_spread": 0.0069,
+   "scale_bias_delta_from_init": [
+    0.0509,
+    0.0378,
+    0.0928
+   ],
+   "scale_weight_row_cosines": [
+    0.572385,
+    0.484142,
+    0.179013
+   ],
+   "scale_weight_row_gap": [
+    0.5608,
+    0.897,
+    0.6191
+   ],
+   "scale_weight_norm": 1.2076,
+   "scale_weight_abs_mean": 0.050892,
+   "opacity": 0.0182,
+   "opacity_bias_delta_from_init": -0.0962,
+   "opacity_weight_norm": 0.8086,
+   "realised": {
+    "scale_mean": 0.5381,
+    "opacity_mean": 0.0755,
+    "residual_abs_mean": 0.484
+   }
+  },
+  {
+   "checkpoint": "out/a5_s43/epoch_40.pth",
+   "base_scales_per_axis": [
+    0.3546,
+    0.3546,
+    0.3622
+   ],
+   "base_scale_isotropy_ratio": 1.0215,
+   "base_scale_spread": 0.0076,
+   "scale_bias_delta_from_init": [
+    0.0371,
+    0.0364,
+    0.0975
+   ],
+   "scale_weight_row_cosines": [
+    0.602903,
+    0.462741,
+    0.166053
+   ],
+   "scale_weight_row_gap": [
+    0.5461,
+    0.878,
+    0.6292
+   ],
+   "scale_weight_norm": 1.2115,
+   "scale_weight_abs_mean": 0.051001,
+   "opacity": 0.01806,
+   "opacity_bias_delta_from_init": -0.1041,
+   "opacity_weight_norm": 0.7491,
+   "realised": {
+    "scale_mean": 0.5338,
+    "opacity_mean": 0.0833,
+    "residual_abs_mean": 0.4934
+   }
+  }
+ ]
+}

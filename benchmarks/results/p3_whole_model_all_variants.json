@@ -1,0 +1,26 @@
+{
+ "a0_none": {
+  "p50_ms": 226.1,
+  "min_ms": 95.3,
+  "peak_mib": 7701.5,
+  "frames": 9
+ },
+ "a2_knn": {
+  "p50_ms": 465.9,
+  "min_ms": 103.1,
+  "peak_mib": 7701.9,
+  "frames": 9
+ },
+ "a5_sparse32": {
+  "p50_ms": 479.9,
+  "min_ms": 90.9,
+  "peak_mib": 7701.9,
+  "frames": 9
+ },
+ "dense_block": {
+  "p50_ms": 344.8,
+  "min_ms": 143.0,
+  "peak_mib": 7701.9,
+  "frames": 9
+ }
+}

@@ -1,0 +1,29 @@
+{
+ "script": "benchmarks/p1/a4_field_size_probe.py",
+ "dump": "benchmarks/results/real_points.pt",
+ "points": 138124,
+ "support_sigma": 3.0,
+ "sample": 512,
+ "seed": 0,
+ "rows": [
+  {
+   "label": "A4 global (0.4051)",
+   "scale": 0.4051,
+   "box_half_width_m": 1.2153,
+   "accepted_degree_mean": 545.625,
+   "accepted_degree_p95": 1740.9,
+   "accepted_degree_max": 2798.0
+  },
+  {
+   "label": "A5 realised mean (0.5381)",
+   "scale": 0.5381,
+   "box_half_width_m": 1.6143,
+   "accepted_degree_mean": 941.0,
+   "accepted_degree_p95": 2707.0,
+   "accepted_degree_max": 4219.0
+  }
+ ],
+ "half_width_ratio": 0.7528,
+ "accepted_ratio_a5_over_a4": 1.725,
+ "note": "A5 per-point scale spread is not recoverable from the flat dump; both arms use a constant scale, so this measures the box-size effect the confound is about."
+}

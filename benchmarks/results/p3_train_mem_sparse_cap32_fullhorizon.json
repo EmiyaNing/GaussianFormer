@@ -1,0 +1,15 @@
+{
+ "config": "config/opus/ablations/p1_a5_gaussian.py",
+ "checkpoint": "out/p1_a5_gaussian/epoch_40.pth",
+ "batch_size": 1,
+ "trainable_params": 180501,
+ "rows": [
+  {
+   "max_neighbours": 32,
+   "steps": 5,
+   "p50_ms": 654.766,
+   "p95_ms": 938.192,
+   "peak_alloc_mib": 2210.85
+  }
+ ]
+}

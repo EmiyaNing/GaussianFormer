@@ -1,0 +1,68 @@
+{
+ "script": "benchmarks/p1/kernel_form_controls.py",
+ "variants": {
+  "A0 baseline": "a0_base",
+  "A2 uniform mean (kNN-8)": "a2_knn_mean",
+  "A4 fixed isotropic Gaussian": "a4_fixed_gaussian",
+  "A5 learnable Gaussian": "a5_cap0"
+ },
+ "available": [
+  "A0 baseline",
+  "A2 uniform mean (kNN-8)",
+  "A4 fixed isotropic Gaussian",
+  "A5 learnable Gaussian"
+ ],
+ "missing": [],
+ "rows": [
+  {
+   "label": "A0 baseline",
+   "variant": "a0_base",
+   "recorded_mIoU": 14.23,
+   "fixed_mIoU": 14.229,
+   "thin": 6.196,
+   "structural": 17.296
+  },
+  {
+   "label": "A2 uniform mean (kNN-8)",
+   "variant": "a2_knn_mean",
+   "recorded_mIoU": 14.37,
+   "fixed_mIoU": 14.3747,
+   "thin": 6.629,
+   "structural": 17.321
+  },
+  {
+   "label": "A4 fixed isotropic Gaussian",
+   "variant": "a4_fixed_gaussian",
+   "recorded_mIoU": 14.36,
+   "fixed_mIoU": 14.3611,
+   "thin": 6.525,
+   "structural": 17.341
+  },
+  {
+   "label": "A5 learnable Gaussian",
+   "variant": "a5_cap0",
+   "recorded_mIoU": 14.32,
+   "fixed_mIoU": 14.317,
+   "thin": 6.418,
+   "structural": 17.325
+  }
+ ],
+ "contrasts": {
+  "A5 - A4": {
+   "delta": -0.0441,
+   "thin_delta": -0.1071,
+   "single_factor": true
+  },
+  "A4 - A2": {
+   "delta": -0.0136,
+   "thin_delta": -0.1041,
+   "single_factor": false
+  },
+  "A5 - A2": {
+   "delta": -0.0577,
+   "thin_delta": -0.2112,
+   "single_factor": false
+  }
+ },
+ "verdict": "geometry-is-the-harm"
+}

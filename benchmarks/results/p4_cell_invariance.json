@@ -1,0 +1,236 @@
+{
+ "script": "benchmarks/p4/cell_invariance.py",
+ "real_points": "benchmarks/results/real_points.pt",
+ "gaussians": 34560,
+ "sample": 512,
+ "seed": 0,
+ "device": "cpu",
+ "claim": "the admitted neighbour set is identical for every cell size; cell_size changes cost only",
+ "rows": [
+  {
+   "scale": 0.5299999713897705,
+   "max_scale": 0.53,
+   "support_sigma": 3.0,
+   "sample": 512,
+   "brute_force_accepted_mean": 215.228516,
+   "brute_force_accepted_p50": 147.0,
+   "brute_force_accepted_p95": 661.2,
+   "cells": {
+    "0.6": {
+     "k": 3,
+     "window_cells": 343,
+     "window_radius_m": 1.8,
+     "box_radius_m": 1.59,
+     "window_covers_box": true,
+     "accepted_mean": 215.229,
+     "accepted_p50": 147.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    },
+    "1.2": {
+     "k": 2,
+     "window_cells": 125,
+     "window_radius_m": 2.4,
+     "box_radius_m": 1.59,
+     "window_covers_box": true,
+     "accepted_mean": 215.229,
+     "accepted_p50": 147.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    },
+    "1.8": {
+     "k": 1,
+     "window_cells": 27,
+     "window_radius_m": 1.8,
+     "box_radius_m": 1.59,
+     "window_covers_box": true,
+     "accepted_mean": 215.229,
+     "accepted_p50": 147.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    },
+    "2.4": {
+     "k": 1,
+     "window_cells": 27,
+     "window_radius_m": 2.4,
+     "box_radius_m": 1.59,
+     "window_covers_box": true,
+     "accepted_mean": 215.229,
+     "accepted_p50": 147.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    },
+    "3.6": {
+     "k": 1,
+     "window_cells": 27,
+     "window_radius_m": 3.6,
+     "box_radius_m": 1.59,
+     "window_covers_box": true,
+     "accepted_mean": 215.229,
+     "accepted_p50": 147.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    }
+   },
+   "scale_jitter": 0.0,
+   "scale_requested": 0.53
+  },
+  {
+   "scale": 1.2596726417541504,
+   "max_scale": 1.259673,
+   "support_sigma": 3.0,
+   "sample": 512,
+   "brute_force_accepted_mean": 209.136719,
+   "brute_force_accepted_p50": 144.0,
+   "brute_force_accepted_p95": 630.3,
+   "cells": {
+    "0.6": {
+     "k": 7,
+     "window_cells": 3375,
+     "window_radius_m": 4.2,
+     "box_radius_m": 3.779018,
+     "window_covers_box": true,
+     "accepted_mean": 209.137,
+     "accepted_p50": 144.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    },
+    "1.2": {
+     "k": 4,
+     "window_cells": 729,
+     "window_radius_m": 4.8,
+     "box_radius_m": 3.779018,
+     "window_covers_box": true,
+     "accepted_mean": 209.137,
+     "accepted_p50": 144.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    },
+    "1.8": {
+     "k": 3,
+     "window_cells": 343,
+     "window_radius_m": 5.4,
+     "box_radius_m": 3.779018,
+     "window_covers_box": true,
+     "accepted_mean": 209.137,
+     "accepted_p50": 144.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    },
+    "2.4": {
+     "k": 2,
+     "window_cells": 125,
+     "window_radius_m": 4.8,
+     "box_radius_m": 3.779018,
+     "window_covers_box": true,
+     "accepted_mean": 209.137,
+     "accepted_p50": 144.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    },
+    "3.6": {
+     "k": 2,
+     "window_cells": 125,
+     "window_radius_m": 7.2,
+     "box_radius_m": 3.779018,
+     "window_covers_box": true,
+     "accepted_mean": 209.137,
+     "accepted_p50": 144.0,
+     "missing_total": 0,
+     "extra_total": 0,
+     "mismatched_queries": 0,
+     "max_symmetric_difference": 0
+    }
+   },
+   "scale_jitter": 0.3,
+   "scale_requested": 0.53
+  }
+ ],
+ "cap_selection": {
+  "region_m": 6.0,
+  "points": 6000,
+  "support_sigma": 3.0,
+  "max_scale": 0.53,
+  "caps": {
+   "8": {
+    "reference_cell": 1.8,
+    "scans": 50189,
+    "cells": {
+     "0.6": {
+      "identical_rows": 3,
+      "identical_fraction": 0.0005,
+      "mean_jaccard": 0.1002,
+      "scans": 48008
+     },
+     "1.2": {
+      "identical_rows": 8,
+      "identical_fraction": 0.0013,
+      "mean_jaccard": 0.2082,
+      "scans": 48387
+     },
+     "2.4": {
+      "identical_rows": 404,
+      "identical_fraction": 0.0673,
+      "mean_jaccard": 0.3712,
+      "scans": 62817
+     },
+     "3.6": {
+      "identical_rows": 433,
+      "identical_fraction": 0.0722,
+      "mean_jaccard": 0.4071,
+      "scans": 84485
+     }
+    }
+   },
+   "32": {
+    "reference_cell": 1.8,
+    "scans": 226681,
+    "cells": {
+     "0.6": {
+      "identical_rows": 13,
+      "identical_fraction": 0.0022,
+      "mean_jaccard": 0.1539,
+      "scans": 192921
+     },
+     "1.2": {
+      "identical_rows": 14,
+      "identical_fraction": 0.0023,
+      "mean_jaccard": 0.2167,
+      "scans": 205999
+     },
+     "2.4": {
+      "identical_rows": 77,
+      "identical_fraction": 0.0128,
+      "mean_jaccard": 0.372,
+      "scans": 275441
+     },
+     "3.6": {
+      "identical_rows": 104,
+      "identical_fraction": 0.0173,
+      "mean_jaccard": 0.4101,
+      "scans": 405627
+     }
+    }
+   }
+  }
+ },
+ "cap_selection_claim": "with max_neighbours > 0 the SELECTED subset IS cell-dependent (shell order changes with the bin size); the admitted-set invariant does not extend to capped runs"
+}

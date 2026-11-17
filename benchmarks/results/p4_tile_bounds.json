@@ -1,0 +1,52 @@
+{
+ "gaussians": 34560,
+ "scale": 0.53,
+ "bounds": [
+  {
+   "tile_edge": 2,
+   "L_voxel_loads": 20303505,
+   "U_tile_loads": 3430855,
+   "bound_ratio": 5.917914047664503,
+   "naive_scan_iterations": 20303505,
+   "block_scan_iterations": 27446840,
+   "alu_inflation": 1.351827677043939,
+   "tile_voxels": 8,
+   "tile_grid": [
+    100,
+    100,
+    8
+   ]
+  },
+  {
+   "tile_edge": 4,
+   "L_voxel_loads": 20303505,
+   "U_tile_loads": 701445,
+   "bound_ratio": 28.94525586467934,
+   "naive_scan_iterations": 20303505,
+   "block_scan_iterations": 44892480,
+   "alu_inflation": 2.2110704531064957,
+   "tile_voxels": 64,
+   "tile_grid": [
+    50,
+    50,
+    4
+   ]
+  },
+  {
+   "tile_edge": 8,
+   "L_voxel_loads": 20303505,
+   "U_tile_loads": 173750,
+   "bound_ratio": 116.85470503597122,
+   "naive_scan_iterations": 20303505,
+   "block_scan_iterations": 88960000,
+   "alu_inflation": 4.381509497990618,
+   "tile_voxels": 512,
+   "tile_grid": [
+    25,
+    25,
+    2
+   ]
+  }
+ ],
+ "timings": null
+}

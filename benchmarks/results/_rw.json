@@ -1,0 +1,47 @@
+{
+  "op": "g2q",
+  "dist": "real",
+  "gaussians": 76800,
+  "batch": 1,
+  "classes": 17,
+  "cell_size": 1.8,
+  "support_sigma": 3.0,
+  "scale": 0.35,
+  "max_scale": 0.35,
+  "max_neighbours": 256,
+  "forward": {
+    "p50_ms": 12.2045,
+    "p95_ms": 12.7794,
+    "min_ms": 11.5544,
+    "max_ms": 12.8154,
+    "peak_alloc_mib": 31.269,
+    "peak_reserved_mib": 48.0
+  },
+  "forward_backward": {
+    "p50_ms": 24.9635,
+    "p95_ms": 25.6632,
+    "min_ms": 24.363,
+    "max_ms": 25.8529,
+    "peak_alloc_mib": 37.4214,
+    "peak_reserved_mib": 50.0
+  },
+  "backward_derived": {
+    "p50_ms": 12.7589,
+    "p95_ms": 12.8839,
+    "note": "derived as forward+backward minus forward"
+  },
+  "pairs": {
+    "candidate_pairs": 104205792,
+    "degree_mean": 1356.8463,
+    "degree_p50": 952.0,
+    "degree_p95": 3930.0,
+    "degree_p99": 4681.0,
+    "degree_max": 4950.0,
+    "cell_grid": [
+      45,
+      45,
+      4
+    ]
+  },
+  "device": "NVIDIA GeForce RTX 4090"
+}

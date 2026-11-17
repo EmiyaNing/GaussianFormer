@@ -1,0 +1,47 @@
+{
+ "script": "benchmarks/p1/cap_cell_interaction.py",
+ "uncapped_reference": "a5_cap0",
+ "cell_variants": {
+  "0.9": "a5_cap8_cell0p9",
+  "1.8": "a5_cap8",
+  "3.6": "a5_cap8_cell3p6"
+ },
+ "trained_cell": 1.8,
+ "cell_invariance_licence": true,
+ "licence_artifact": "benchmarks/results/p4_robustness.json",
+ "tolerance": 0.03,
+ "rows": [
+  {
+   "cell": 0.9,
+   "variant": "a5_cap8_cell0p9",
+   "fixed_mIoU": null,
+   "cap_cost": null,
+   "thin_cost": null,
+   "structural_cost": null
+  },
+  {
+   "cell": 1.8,
+   "variant": "a5_cap8",
+   "fixed_mIoU": 14.0502,
+   "cap_cost": 0.2668,
+   "thin_cost": 0.2,
+   "structural_cost": 0.286
+  },
+  {
+   "cell": 3.6,
+   "variant": "a5_cap8_cell3p6",
+   "fixed_mIoU": null,
+   "cap_cost": null,
+   "thin_cost": null,
+   "structural_cost": null
+  }
+ ],
+ "costs": {
+  "0.9": null,
+  "1.8": 0.2668,
+  "3.6": null
+ },
+ "spread": null,
+ "worst_cell": null,
+ "verdict": "INCOMPLETE"
+}

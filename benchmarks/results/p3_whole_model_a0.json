@@ -1,0 +1,20 @@
+{
+ "config": "config/opus/ablations/p1_a0_base.py",
+ "checkpoint": "ckpts/sparseworld_strict_epoch_56.pth",
+ "total_params": 76029425,
+ "trainable_params": 75804081,
+ "adapter_params": 0,
+ "max_neighbours": null,
+ "profile": [
+  {
+   "max_neighbours": null,
+   "frames": 25,
+   "p50_ms": 238.077,
+   "p95_ms": 430.707,
+   "min_ms": 118.089,
+   "max_ms": 438.826,
+   "fps_p50": 4.2,
+   "peak_alloc_mib": 2819.79
+  }
+ ]
+}

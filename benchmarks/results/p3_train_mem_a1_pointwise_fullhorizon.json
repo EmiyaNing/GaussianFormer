@@ -1,0 +1,15 @@
+{
+ "config": "config/opus/ablations/p1_a1_pointwise.py",
+ "checkpoint": "out/a1_pointwise/epoch_40.pth",
+ "batch_size": 1,
+ "trainable_params": 179985,
+ "rows": [
+  {
+   "max_neighbours": 0,
+   "steps": 6,
+   "p50_ms": 626.794,
+   "p95_ms": 804.579,
+   "peak_alloc_mib": 2210.85
+  }
+ ]
+}

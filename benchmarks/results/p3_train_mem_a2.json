@@ -1,0 +1,15 @@
+{
+ "config": "config/opus/ablations/p1_a2_knn_mean.py",
+ "checkpoint": "out/a2_knn_mean/epoch_40.pth",
+ "batch_size": 1,
+ "trainable_params": 179985,
+ "rows": [
+  {
+   "max_neighbours": 0,
+   "steps": 12,
+   "p50_ms": 250.072,
+   "p95_ms": 503.843,
+   "peak_alloc_mib": 2206.96
+  }
+ ]
+}

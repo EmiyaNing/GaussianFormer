@@ -1,0 +1,21 @@
+{
+ "script": "benchmarks/p1/receptive_field_controls.py",
+ "fixed_divisor_mIoU": {
+  "a5_cap0": 14.317009803921568,
+  "a2_knn_mean": 14.374725490196079
+ },
+ "missing": [
+  "a2_knn_k59",
+  "a2_knn_k215"
+ ],
+ "tolerance": 0.054,
+ "branch": "INCOMPLETE",
+ "deltas": {
+  "effective_minus_small": null,
+  "gaussian_minus_small": -0.05771568627451096,
+  "effective_minus_gaussian": null,
+  "nominal_minus_gaussian": null,
+  "nominal_minus_small": null
+ },
+ "uniform_approximation_gap": 0.1469321995973587
+}

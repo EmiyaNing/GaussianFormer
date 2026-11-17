@@ -1,0 +1,40 @@
+{
+ "config": "config/opus/ablations/p1_a5_gaussian.py",
+ "checkpoint": "out/p1_a5_gaussian/epoch_40.pth",
+ "total_params": 76209926,
+ "trainable_params": 180501,
+ "adapter_params": 180501,
+ "max_neighbours": 0,
+ "profile": [
+  {
+   "max_neighbours": 0,
+   "frames": 25,
+   "p50_ms": 500.611,
+   "p95_ms": 703.036,
+   "min_ms": 259.903,
+   "max_ms": 772.288,
+   "fps_p50": 1.998,
+   "peak_alloc_mib": 2823.35
+  },
+  {
+   "max_neighbours": 32,
+   "frames": 25,
+   "p50_ms": 364.38,
+   "p95_ms": 587.36,
+   "min_ms": 150.532,
+   "max_ms": 654.148,
+   "fps_p50": 2.744,
+   "peak_alloc_mib": 2823.35
+  },
+  {
+   "max_neighbours": 128,
+   "frames": 25,
+   "p50_ms": 364.862,
+   "p95_ms": 552.585,
+   "min_ms": 191.582,
+   "max_ms": 596.676,
+   "fps_p50": 2.741,
+   "peak_alloc_mib": 2823.35
+  }
+ ]
+}

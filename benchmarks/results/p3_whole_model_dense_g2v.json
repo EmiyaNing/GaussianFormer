@@ -1,0 +1,20 @@
+{
+ "config": "config/opus/ablations/p3_dense_g2v.py",
+ "checkpoint": "out/p1_a5_gaussian/epoch_40.pth",
+ "total_params": 76209926,
+ "trainable_params": 180501,
+ "adapter_params": 180501,
+ "max_neighbours": null,
+ "profile": [
+  {
+   "max_neighbours": null,
+   "frames": 8,
+   "p50_ms": 522.129,
+   "p95_ms": 783.673,
+   "min_ms": 373.896,
+   "max_ms": 835.211,
+   "fps_p50": 1.915,
+   "peak_alloc_mib": 3087.19
+  }
+ ]
+}

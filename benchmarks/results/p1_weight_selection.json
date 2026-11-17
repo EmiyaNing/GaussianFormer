@@ -1,0 +1,71 @@
+{
+ "script": "benchmarks/p1/weight_selection_decomposition.py",
+ "chain": {
+  "a2_knn_mean": "A2 KNN-8 uniform",
+  "a2_knn_gaussian8": "A2-gauss KNN-8",
+  "a5_cap8": "A5 cap=8",
+  "a5_cap0": "A5 cap=0"
+ },
+ "available": [
+  "a2_knn_mean",
+  "a5_cap8",
+  "a5_cap0"
+ ],
+ "missing": [
+  "a2_knn_gaussian8"
+ ],
+ "rows": [
+  {
+   "variant": "a2_knn_mean",
+   "label": "A2 KNN-8 uniform",
+   "fixes": "8 nearest, uniform mean",
+   "recorded_mIoU": 14.37,
+   "fixed_mIoU": 14.3747,
+   "thin": 6.629,
+   "structural": 17.321
+  },
+  {
+   "variant": "a5_cap8",
+   "label": "A5 cap=8",
+   "fixes": "shell-ordered 8, Gaussian weights",
+   "recorded_mIoU": 14.05,
+   "fixed_mIoU": 14.0502,
+   "thin": 6.218,
+   "structural": 17.039
+  },
+  {
+   "variant": "a5_cap0",
+   "label": "A5 cap=0",
+   "fixes": "support box (~215), Gaussian weights",
+   "recorded_mIoU": 14.32,
+   "fixed_mIoU": 14.317,
+   "thin": 6.418,
+   "structural": 17.325
+  }
+ ],
+ "steps": {
+  "weighting": {
+   "earlier": "a2_knn_mean",
+   "later": "a2_knn_gaussian8",
+   "fixes": "same 8 nearest: uniform mean -> Gaussian weights",
+   "delta_fixed": null
+  },
+  "selection": {
+   "earlier": "a2_knn_gaussian8",
+   "later": "a5_cap8",
+   "fixes": "same Gaussian weights: KNN-8 -> shell-ordered cap 8",
+   "delta_fixed": null
+  },
+  "cap": {
+   "earlier": "a5_cap8",
+   "later": "a5_cap0",
+   "fixes": "same Gaussian weights and order: cap 8 -> unbounded",
+   "delta_fixed": 0.2668
+  }
+ },
+ "total_fixed": -0.0577,
+ "tolerance": 0.05,
+ "missing_cell": "uniform weights x shell-ordered cap 8",
+ "verdict": "INCOMPLETE",
+ "dominant": null
+}

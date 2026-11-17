@@ -1,0 +1,15 @@
+{
+ "config": "config/opus/ablations/p3_dense_g2v.py",
+ "checkpoint": "out/p1_a5_gaussian/epoch_40.pth",
+ "batch_size": 1,
+ "trainable_params": 180501,
+ "rows": [
+  {
+   "max_neighbours": 0,
+   "steps": 5,
+   "p50_ms": 760.237,
+   "p95_ms": 841.05,
+   "peak_alloc_mib": 5761.27
+  }
+ ]
+}

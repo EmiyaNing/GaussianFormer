@@ -1,0 +1,29 @@
+{
+ "gaussians": 76800,
+ "scale": 0.35,
+ "reps": 15,
+ "grid_shape": [
+  200,
+  200,
+  16
+ ],
+ "rows": [
+  {
+   "operator": "naive_localagg",
+   "p50_ms": 9.379,
+   "p95_ms": 25.808,
+   "min_ms": 7.79,
+   "max_ms": 35.125,
+   "peak_alloc_mib": 607.7
+  },
+  {
+   "operator": "block_4x4x4",
+   "p50_ms": 1.152,
+   "p95_ms": 3.155,
+   "min_ms": 1.083,
+   "max_ms": 3.328,
+   "peak_alloc_mib": 95.0
+  }
+ ],
+ "speedup_p50": 8.141
+}

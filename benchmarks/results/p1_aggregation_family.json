@@ -1,0 +1,77 @@
+{
+ "script": "benchmarks/p1/aggregation_family.py",
+ "family": {
+  "A0 baseline": "a0_base",
+  "A1 point-wise": "a1_pointwise",
+  "A2 KNN mean": "a2_knn_mean",
+  "A2 KNN max": "a2_knn_max",
+  "A3 attention": "a3_graph_attention",
+  "A5 Gaussian": "a5_cap0"
+ },
+ "available": {
+  "A0 baseline": "a0_base",
+  "A1 point-wise": "a1_pointwise",
+  "A2 KNN mean": "a2_knn_mean",
+  "A2 KNN max": "a2_knn_max",
+  "A3 attention": "a3_graph_attention",
+  "A5 Gaussian": "a5_cap0"
+ },
+ "missing": [],
+ "rows": [
+  {
+   "label": "A0 baseline",
+   "variant": "a0_base",
+   "recorded_mIoU": 14.23,
+   "fixed_mIoU": 14.229,
+   "thin": 6.196,
+   "structural": 17.296,
+   "neighbours": "\u2014 (frozen baseline)"
+  },
+  {
+   "label": "A1 point-wise",
+   "variant": "a1_pointwise",
+   "recorded_mIoU": 14.35,
+   "fixed_mIoU": 14.3475,
+   "thin": 6.649,
+   "structural": 17.277,
+   "neighbours": "none (no aggregation)"
+  },
+  {
+   "label": "A2 KNN mean",
+   "variant": "a2_knn_mean",
+   "recorded_mIoU": 14.37,
+   "fixed_mIoU": 14.3747,
+   "thin": 6.629,
+   "structural": 17.321,
+   "neighbours": "8 nearest (uniform mean)"
+  },
+  {
+   "label": "A2 KNN max",
+   "variant": "a2_knn_max",
+   "recorded_mIoU": 14.4,
+   "fixed_mIoU": 14.4014,
+   "thin": 6.727,
+   "structural": 17.322,
+   "neighbours": "8 nearest (max)"
+  },
+  {
+   "label": "A3 attention",
+   "variant": "a3_graph_attention",
+   "recorded_mIoU": 14.37,
+   "fixed_mIoU": 14.3668,
+   "thin": 6.6,
+   "structural": 17.321,
+   "neighbours": "8 nearest (attention)"
+  },
+  {
+   "label": "A5 Gaussian",
+   "variant": "a5_cap0",
+   "recorded_mIoU": 14.32,
+   "fixed_mIoU": 14.317,
+   "thin": 6.418,
+   "structural": 17.325,
+   "neighbours": "support box (~215)"
+  }
+ ],
+ "verdict": "CONFIRMED"
+}

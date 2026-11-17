@@ -1,0 +1,26 @@
+{
+ "dist": "real",
+ "gaussians": 34560,
+ "scale": 0.53,
+ "cell": 1.8,
+ "support": 3.0,
+ "k": 8,
+ "queries_analysed": 200,
+ "mean_selection_overlap": 0.1769,
+ "overlap_p05": 0.0,
+ "overlap_p50": 0.125,
+ "overlap_p95": 0.625,
+ "mean_distance_knn_m": 0.3992,
+ "mean_distance_shell_m": 0.9779,
+ "gaussian_weight_ess": {
+  "0.35": 6.919,
+  "0.53": 7.561,
+  "1.0": 7.926
+ },
+ "gaussian_nearest_weight_share": {
+  "0.35": 0.218,
+  "0.53": 0.17,
+  "1.0": 0.137
+ },
+ "uniform_weight_ess": 8.0
+}

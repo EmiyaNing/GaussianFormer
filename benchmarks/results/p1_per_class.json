@@ -1,0 +1,168 @@
+{
+ "groups": {
+  "small": [
+   "bicycle",
+   "motorcycle",
+   "pedestrian",
+   "traffic_cone",
+   "barrier"
+  ],
+  "large": [
+   "car",
+   "truck",
+   "bus",
+   "construction_vehicle",
+   "trailer",
+   "driveable_surface",
+   "sidewalk",
+   "terrain",
+   "manmade",
+   "vegetation",
+   "others",
+   "other_flat"
+  ]
+ },
+ "fixed_sets": {
+  "small_pairs": [
+   "0s/barrier",
+   "0s/bicycle",
+   "0s/motorcycle",
+   "0s/pedestrian",
+   "0s/traffic_cone",
+   "2s/barrier",
+   "2s/bicycle",
+   "2s/pedestrian",
+   "2s/traffic_cone",
+   "4s/barrier",
+   "4s/bicycle",
+   "4s/pedestrian",
+   "4s/traffic_cone",
+   "6s/barrier",
+   "6s/bicycle",
+   "6s/pedestrian",
+   "6s/traffic_cone"
+  ],
+  "large_pairs": [
+   "0s/bus",
+   "0s/car",
+   "0s/construction_vehicle",
+   "0s/driveable_surface",
+   "0s/manmade",
+   "0s/other_flat",
+   "0s/others",
+   "0s/sidewalk",
+   "0s/terrain",
+   "0s/trailer",
+   "0s/truck",
+   "0s/vegetation",
+   "2s/bus",
+   "2s/car",
+   "2s/construction_vehicle",
+   "2s/driveable_surface",
+   "2s/manmade",
+   "2s/other_flat",
+   "2s/others",
+   "2s/sidewalk",
+   "2s/terrain",
+   "2s/truck",
+   "2s/vegetation",
+   "4s/bus",
+   "4s/car",
+   "4s/construction_vehicle",
+   "4s/driveable_surface",
+   "4s/manmade",
+   "4s/other_flat",
+   "4s/others",
+   "4s/sidewalk",
+   "4s/terrain",
+   "4s/truck",
+   "4s/vegetation",
+   "6s/bus",
+   "6s/car",
+   "6s/construction_vehicle",
+   "6s/driveable_surface",
+   "6s/manmade",
+   "6s/other_flat",
+   "6s/others",
+   "6s/sidewalk",
+   "6s/terrain",
+   "6s/truck",
+   "6s/vegetation"
+  ]
+ },
+ "rows": {
+  "a0_base": {
+   "small": 6.195882352941177,
+   "large": 17.296444444444447,
+   "official_avg_mIoU": 14.23,
+   "label": "A0 baseline"
+  },
+  "a1_pointwise": {
+   "small": 6.648823529411764,
+   "large": 17.277333333333335,
+   "official_avg_mIoU": 14.35,
+   "label": "A1 point-wise"
+  },
+  "a2_knn_mean": {
+   "small": 6.629411764705884,
+   "large": 17.320888888888888,
+   "official_avg_mIoU": 14.37,
+   "label": "A2 KNN-8 mean (s42)"
+  },
+  "a2_s43": {
+   "small": 6.553529411764707,
+   "large": 17.32088888888889,
+   "official_avg_mIoU": 14.13,
+   "label": "A2 KNN-8 mean (s43)"
+  },
+  "a2_s44": {
+   "small": 6.642941176470587,
+   "large": 17.30644444444445,
+   "official_avg_mIoU": 14.37,
+   "label": "A2 KNN-8 mean (s44)"
+  },
+  "a3_graph_attention": {
+   "small": 6.6,
+   "large": 17.320888888888888,
+   "official_avg_mIoU": 14.37,
+   "label": "A3 attention"
+  },
+  "a5_cap0": {
+   "small": 6.418235294117647,
+   "large": 17.324888888888886,
+   "official_avg_mIoU": 14.32,
+   "label": "A5 Gaussian (s42)"
+  },
+  "a5_s43": {
+   "small": 6.431764705882352,
+   "large": 17.384,
+   "official_avg_mIoU": 14.16,
+   "label": "A5 Gaussian (s43)"
+  },
+  "a5_s44": {
+   "small": 6.516470588235293,
+   "large": 17.359777777777783,
+   "official_avg_mIoU": 13.94,
+   "label": "A5 Gaussian (s44)"
+  }
+ },
+ "paired": {
+  "seed 42": {
+   "small": -0.21117647058823685,
+   "large": 0.003999999999997783,
+   "all17": -0.05499999999999439
+  },
+  "seed 43": {
+   "small": -0.121764705882355,
+   "large": 0.0631111111111089,
+   "all17": 0.012419354838710817
+  },
+  "seed 44": {
+   "small": -0.12647058823529367,
+   "large": 0.053333333333334565,
+   "all17": 0.004032258064516014
+  }
+ },
+ "small_object_sign_repeats": true,
+ "small_object_seeds": 3
+}

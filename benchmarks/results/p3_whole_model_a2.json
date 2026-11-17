@@ -1,0 +1,20 @@
+{
+ "config": "config/opus/ablations/p1_a2_knn_mean.py",
+ "checkpoint": "out/a2_knn_mean/epoch_40.pth",
+ "total_params": 76209410,
+ "trainable_params": 179985,
+ "adapter_params": 179985,
+ "max_neighbours": null,
+ "profile": [
+  {
+   "max_neighbours": null,
+   "frames": 25,
+   "p50_ms": 269.573,
+   "p95_ms": 616.394,
+   "min_ms": 99.467,
+   "max_ms": 638.64,
+   "fps_p50": 3.71,
+   "peak_alloc_mib": 2822.97
+  }
+ ]
+}

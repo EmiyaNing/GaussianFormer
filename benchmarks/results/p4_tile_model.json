@@ -1,0 +1,44 @@
+{
+ "calibration": {
+  "gaussians": 76800,
+  "scale": 0.35,
+  "tile": 4,
+  "naive_p50_ms": 9.379,
+  "block4_p50_ms": 1.152
+ },
+ "per_load_ms": 4.0392679261109965e-07,
+ "per_scan_ms": 1.1801559783283329e-08,
+ "load_scan_ratio": 34.22655988094504,
+ "predicted_p50_ms": {
+  "2": 2.009355767461712,
+  "4": 1.1519999999999997,
+  "8": 1.8244454615009973
+ },
+ "predicted_optimum_tile": 4,
+ "model_point": {
+  "gaussians": 34560,
+  "scale": 0.53,
+  "measured_block4_ms": 0.795
+ },
+ "model_point_predictions": {
+  "2": 1.7097297791859665,
+  "4": 0.8131337155829439,
+  "8": 1.1200490385370636
+ },
+ "model_point_out_of_sample_error": 0.022809705135778433,
+ "bounds_gaussians": 76800,
+ "bounds_scale": 0.35,
+ "measured": {
+  "2": 1.454,
+  "4": 0.746,
+  "8": 0.858
+ },
+ "measured_errors": {
+  "2": 0.17588017825719843,
+  "4": 0.08999157584845027,
+  "8": 0.3054184598334075
+ },
+ "measured_optimum_tile": 4,
+ "measured_agrees_with_prediction": true,
+ "model_incomplete_at_this_workload": true
+}

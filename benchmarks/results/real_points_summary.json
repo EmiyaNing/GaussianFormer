@@ -1,0 +1,14 @@
+{
+ "samples": 4,
+ "points_total": 138124,
+ "points_inside_range": 138124,
+ "per_sample_mean": 34531.0,
+ "out": "benchmarks/results/real_points.pt",
+ "z_percentiles": {
+  "p5": -0.6,
+  "p25": -0.187,
+  "p50": 0.022,
+  "p75": 1.342,
+  "p95": 4.358
+ }
+}

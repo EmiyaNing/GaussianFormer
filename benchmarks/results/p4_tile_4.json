@@ -1,0 +1,22 @@
+{
+ "gaussians": 34560,
+ "scale": 0.53,
+ "reps": 15,
+ "grid_shape": [
+  200,
+  200,
+  16
+ ],
+ "tile_edge": 4,
+ "rows": [
+  {
+   "operator": "block_4x4x4",
+   "p50_ms": 0.746,
+   "p95_ms": 0.763,
+   "min_ms": 0.734,
+   "max_ms": 0.764,
+   "peak_alloc_mib": 80.9
+  }
+ ],
+ "speedup_p50": null
+}
